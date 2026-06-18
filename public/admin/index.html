@@ -1,0 +1,1999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APOV Admin Portal - Dashboard</title>
+    <!-- Google Fonts Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-layout" id="appLayout">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-wrapper">
+                    <div class="logo">ATHLETE'S POV</div>
+                    <div class="logo-sub">ADMIN PANEL</div>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <!-- Dashboard -->
+                <a href="#dashboard" class="nav-item active" onclick="switchTab('dashboard')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"></rect><rect x="14" y="3" width="7" height="5"></rect><rect x="14" y="12" width="7" height="9"></rect><rect x="3" y="16" width="7" height="5"></rect></svg>
+                    <span class="nav-text">Dashboard</span>
+                </a>
+
+                <!-- Users Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                            <span class="nav-text">Users</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#users" class="nav-sub-item" onclick="switchTab('users')">Users</a>
+                        <a href="#milestones" class="nav-sub-item" onclick="switchTab('milestones')">Milestones</a>
+                        <a href="#rewards" class="nav-sub-item" onclick="switchTab('rewards')">Rewards</a>
+                    </div>
+                </div>
+
+                <!-- Partners Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 11l2 2 4-4"></path></svg>
+                            <span class="nav-text">Partners</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#partners" class="nav-sub-item" onclick="switchTab('partners')">Partners</a>
+                        <a href="#kyc" class="nav-sub-item" onclick="switchTab('kyc')">KYC Verification</a>
+                    </div>
+                </div>
+
+                <!-- Venues Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>
+                            <span class="nav-text">Venues</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#venues" class="nav-sub-item" onclick="switchTab('venues')">Venues</a>
+                        <a href="#approvals" class="nav-sub-item" onclick="switchTab('approvals')">Approvals</a>
+                        <a href="#featured-venues" class="nav-sub-item" onclick="switchTab('featured-venues')">Featured Venues</a>
+                    </div>
+                </div>
+
+                <!-- Bookings Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            <span class="nav-text">Bookings</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#bookings" class="nav-sub-item" onclick="switchTab('bookings')">All Bookings</a>
+                        <a href="#refunds" class="nav-sub-item" onclick="switchTab('refunds')">Refunds</a>
+                        <a href="#reassignment" class="nav-sub-item" onclick="switchTab('reassignment')">Slot Reassignment</a>
+                    </div>
+                </div>
+
+                <!-- Finance Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>
+                            <span class="nav-text">Finance</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#finance" class="nav-sub-item" onclick="switchTab('finance')">Revenue</a>
+                        <a href="#settlements" class="nav-sub-item" onclick="switchTab('settlements')">Settlements</a>
+                        <a href="#pav-ledger" class="nav-sub-item" onclick="switchTab('pav-ledger')">PAV Ledger</a>
+                        <a href="#commissions" class="nav-sub-item" onclick="switchTab('commissions')">Commissions</a>
+                    </div>
+                </div>
+
+                <!-- Tournaments Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                            <span class="nav-text">Tournaments</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#tournaments" class="nav-sub-item" onclick="switchTab('tournaments')">Tournaments</a>
+                        <a href="#registrations" class="nav-sub-item" onclick="switchTab('registrations')">Registrations</a>
+                    </div>
+                </div>
+
+                <!-- Marketing Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+                            <span class="nav-text">Marketing</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#coupons" class="nav-sub-item" onclick="switchTab('coupons')">Coupons</a>
+                        <a href="#notifications" class="nav-sub-item" onclick="switchTab('notifications')">Notifications</a>
+                        <a href="#banners" class="nav-sub-item" onclick="switchTab('banners')">Banners</a>
+                    </div>
+                </div>
+
+                <!-- Moderation Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                            <span class="nav-text">Moderation</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#reviews" class="nav-sub-item" onclick="switchTab('reviews')">Reviews</a>
+                        <a href="#chat-monitoring" class="nav-sub-item" onclick="switchTab('chat-monitoring')">Chat Monitoring</a>
+                    </div>
+                </div>
+
+                <!-- Analytics Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 6l-9.5 9.5-5-5L1 18"></path><path d="M17 6h6v6"></path></svg>
+                            <span class="nav-text">Analytics</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#reports" class="nav-sub-item" onclick="switchTab('reports')">Reports</a>
+                        <a href="#exports" class="nav-sub-item" onclick="switchTab('exports')">Exports</a>
+                    </div>
+                </div>
+
+                <!-- Settings Group -->
+                <div class="nav-group expanded">
+                    <div class="nav-group-header" onclick="toggleNavGroup(this)">
+                        <span class="group-title-wrapper">
+                            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                            <span class="nav-text">Settings</span>
+                        </span>
+                        <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </div>
+                    <div class="nav-group-items">
+                        <a href="#settings" class="nav-sub-item" onclick="switchTab('settings')">System Settings</a>
+                        <a href="#roles" class="nav-sub-item" onclick="switchTab('roles')">Admin Roles</a>
+                        <a href="#audit-logs" class="nav-sub-item" onclick="switchTab('audit-logs')">Audit Logs</a>
+                    </div>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="admin-profile">
+                    <div class="admin-avatar">A</div>
+                    <div class="admin-info">
+                        <span class="admin-email" id="sidebarEmail">admin@athelete.pov</span>
+                        <span class="admin-role">Super Admin</span>
+                    </div>
+                </div>
+                <button class="btn-logout" onclick="logout()">
+                    <svg class="btn-logout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                    <span>Logout</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Wrapper -->
+        <div class="main-wrapper">
+            <!-- Header -->
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                    </button>
+                    <h1 id="viewTitle" class="view-title">Dashboard</h1>
+                </div>
+
+                <div class="header-center">
+                    <div class="search-bar-container">
+                        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" id="headerSearch" class="search-input" placeholder="Search tables (users, venues, bookings)..." onkeyup="handleGlobalSearch(this.value)">
+                    </div>
+                </div>
+                
+                <div class="header-right">
+                    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle Theme">
+                        <svg class="theme-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                    </button>
+                    <div class="header-badge">LIVE</div>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <main class="main-content" id="mainContent">
+                
+                <!-- TAB: DASHBOARD -->
+                <section id="tab-dashboard" class="tab-section active">
+                    <!-- Dashboard KPI Grid -->
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-title">Total Users</div>
+                            <div class="kpi-value" id="kpi-users">-</div>
+                            <div class="kpi-footer">Active platform members</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-title">Total Partners</div>
+                            <div class="kpi-value" id="kpi-partners">-</div>
+                            <div class="kpi-footer">Onboarded hosts</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-title">Total Venues</div>
+                            <div class="kpi-value" id="kpi-venues">-</div>
+                            <div class="kpi-footer">Sports facilities listed</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-title">Today's Bookings</div>
+                            <div class="kpi-value" id="kpi-today-bookings">-</div>
+                            <div class="kpi-footer">Bookings made today</div>
+                        </div>
+                        <div class="kpi-card accent">
+                            <div class="kpi-title">Gross Revenue</div>
+                            <div class="kpi-value" id="kpi-revenue">₹0.00</div>
+                            <div class="kpi-footer">Total payments processed</div>
+                        </div>
+                        <div class="kpi-card secondary">
+                            <div class="kpi-title">Monthly Revenue</div>
+                            <div class="kpi-value" id="kpi-monthly-revenue">₹0.00</div>
+                            <div class="kpi-footer">Processed this month</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-title">Pending KYC Approvals</div>
+                            <div class="kpi-value" id="kpi-pending-kyc">-</div>
+                            <div class="kpi-footer">Awaiting document check</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-title">Active Tournaments</div>
+                            <div class="kpi-value" id="kpi-active-tournaments">-</div>
+                            <div class="kpi-footer">Live & upcoming leagues</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-title">Pending Refunds</div>
+                            <div class="kpi-value" id="kpi-pending-refunds">-</div>
+                            <div class="kpi-footer">Awaiting bank settlement</div>
+                        </div>
+                        <div class="kpi-card accent">
+                            <div class="kpi-title">Outstanding PAV Amount</div>
+                            <div class="kpi-value" id="kpi-outstanding-pav">₹0.00</div>
+                            <div class="kpi-footer">Pay at Venue collections</div>
+                        </div>
+                    </div>
+
+                    <!-- Dashboard Grid: Charts, Quick Actions, Feed -->
+                    <div class="dashboard-charts-grid" style="margin-top: 24px;">
+                        <!-- User Growth Chart -->
+                        <div class="widget-card chart-card">
+                            <div class="chart-header-row">
+                                <h2>User Growth</h2>
+                                <span class="chart-subtitle">Monthly Signups</span>
+                            </div>
+                            <div class="canvas-wrapper">
+                                <canvas id="userGrowthChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Revenue Trends Chart -->
+                        <div class="widget-card chart-card">
+                            <div class="chart-header-row">
+                                <h2>Revenue Trends</h2>
+                                <span class="chart-subtitle">Collections (Daily)</span>
+                            </div>
+                            <div class="canvas-wrapper">
+                                <canvas id="revenueTrendChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Top Cities / Revenue Chart -->
+                        <div class="widget-card chart-card">
+                            <div class="chart-header-row">
+                                <h2>City-wise Revenue</h2>
+                                <span class="chart-subtitle">Regional Sales Breakdown</span>
+                            </div>
+                            <div class="canvas-wrapper">
+                                <canvas id="topCitiesChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px;">
+                        <!-- Quick Actions -->
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Quick Actions</h2>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 20px;">
+                                <button class="btn-primary" onclick="switchTab('kyc')">Approve Partner</button>
+                                <button class="btn-primary" onclick="switchTab('coupons')">Create Coupon</button>
+                                <button class="btn-primary" onclick="switchTab('notifications')">Send Notification</button>
+                                <button class="btn-primary" onclick="switchTab('tournaments')">Create Tournament</button>
+                                <button class="btn-primary" onclick="switchTab('banners')">Add Banner</button>
+                            </div>
+                        </div>
+
+                        <!-- Recent Activities Feed -->
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Recent Activities Feed</h2>
+                            </div>
+                            <div style="padding: 20px; display: flex; flex-direction: column; gap: 12px; max-height: 250px; overflow-y: auto;">
+                                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                                    <span><strong>System</strong> Seeded database matching reference mock data</span>
+                                    <span style="color: var(--text-muted); font-size: 0.75rem;">Just now</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                                    <span><strong>Admin</strong> Logged into console dashboard</span>
+                                    <span style="color: var(--text-muted); font-size: 0.75rem;">5 mins ago</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                                    <span><strong>Partner</strong> Uploaded bank statement ownership document</span>
+                                    <span style="color: var(--text-muted); font-size: 0.75rem;">20 mins ago</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                                    <span><strong>User</strong> Created a new sport venue booking</span>
+                                    <span style="color: var(--text-muted); font-size: 0.75rem;">1 hour ago</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Top Performing Venues Table -->
+                    <div class="glass-card" style="margin-top: 24px;">
+                        <div class="card-header">
+                            <h2>Top Performing Venues</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="topVenuesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Venue Name</th>
+                                        <th>Sport Types</th>
+                                        <th>Base Price</th>
+                                        <th>Rating</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td colspan="4" class="text-center">Loading trends...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: USERS -->
+                <section id="tab-users" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Users Register</h2>
+                            <button class="btn-primary" onclick="openUserCreateModal()">+ Add User</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="usersTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px; padding: 10px 14px;"><input type="checkbox" id="selectAllUsers" onchange="toggleSelectAllUsers(this.checked)"></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('name')">Name & Avatar <span class="sort-icon" id="sort-icon-name">&#9656;</span></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('user_id')">User ID <span class="sort-icon" id="sort-icon-user_id">&#9656;</span></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('phone_number')">Phone Number <span class="sort-icon" id="sort-icon-phone_number">&#9656;</span></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('email')">Email Address <span class="sort-icon" id="sort-icon-email">&#9656;</span></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('total_bookings')">Bookings <span class="sort-icon" id="sort-icon-total_bookings">&#9656;</span></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('total_spend')">Total Spend <span class="sort-icon" id="sort-icon-total_spend">&#9656;</span></th>
+                                        <th class="sortable-header" onclick="sortUsersTable('status')">Status <span class="sort-icon" id="sort-icon-status">&#9656;</span></th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="8" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: PARTNERS -->
+                <section id="tab-partners" class="tab-section">
+                    <!-- KYC Pending Alerts Queue -->
+                    <div class="glass-card error-border" style="margin-bottom: 25px;">
+                        <div class="card-header">
+                            <h2 style="color: var(--error-color)">KYC Document Approval Queue</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="kycQueueTable">
+                                <thead>
+                                    <tr>
+                                        <th>Doc ID</th>
+                                        <th>Host ID</th>
+                                        <th>Document Type</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">No pending items in queue</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>All Partners</h2>
+                            <button class="btn-primary" onclick="openPartnerCreateModal()">+ Add Partner</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="partnersTable">
+                                <thead>
+                                    <tr>
+                                        <th>Partner ID</th>
+                                        <th>Phone Number</th>
+                                        <th>KYC Status</th>
+                                        <th>Plan Tier</th>
+                                        <th>Total Earnings</th>
+                                        <th>Joined At</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="6" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: VENUES -->
+                <section id="tab-venues" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Platform Venues Inventory</h2>
+                            <button class="btn-primary" onclick="openVenueCreateModal()">+ Add Venue</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="venuesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Venue Name</th>
+                                        <th>Host Phone</th>
+                                        <th>Sports</th>
+                                        <th>Base Price</th>
+                                        <th>Avg Rating</th>
+                                        <th>Status</th>
+                                        <th>Featured</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="8" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: BOOKINGS -->
+                <section id="tab-bookings" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Booking Transactions Ledger</h2>
+                            <button class="btn-primary" onclick="openBookingCreateModal()">+ Add Booking</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="bookingsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Code</th>
+                                        <th>Athlete Email</th>
+                                        <th>Venue</th>
+                                        <th>Slot Details</th>
+                                        <th>Online Paid</th>
+                                        <th>Cash Paid</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="8" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: FINANCE -->
+                <section id="tab-finance" class="tab-section">
+                    <div class="finance-editor-card">
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Commission Deductions Structure</h2>
+                            </div>
+                            <div class="finance-form">
+                                <div class="form-row">
+                                    <div class="form-field">
+                                        <label>Platform Commission Rate (%)</label>
+                                        <input type="text" value="3.00%" disabled class="form-control" style="background: #000000">
+                                    </div>
+                                    <div class="form-field">
+                                        <label>GST Applied on Commission (%)</label>
+                                        <input type="text" value="18.00%" disabled class="form-control" style="background: #000000">
+                                    </div>
+                                </div>
+                                <p class="note-text">Constants mapped inside system engine configuration files. Rate is fixed at 3.0% commission + 18.0% GST on commission amount.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card" style="margin-top: 25px;">
+                        <div class="card-header">
+                            <h2>Financial Transaction Registry</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="transactionsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Txn ID</th>
+                                        <th>Booking Code</th>
+                                        <th>Razorpay Order ID</th>
+                                        <th>Razorpay Payment ID</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Settled Amount</th>
+                                        <th>Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="8" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: COUPONS -->
+                <section id="tab-coupons" class="tab-section">
+                    <div class="card-header-actions" style="margin-bottom: 20px;">
+                        <button class="btn-primary" onclick="openCouponModal()">+ Add New Coupon</button>
+                    </div>
+
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Promotional Discount Coupons</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="couponsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Coupon Code</th>
+                                        <th>Type</th>
+                                        <th>Value</th>
+                                        <th>Max Discount</th>
+                                        <th>Min Order</th>
+                                        <th>Usage Limit</th>
+                                        <th>Status</th>
+                                        <th>Validity</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="9" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: NOTIFICATIONS -->
+                <section id="tab-notifications" class="tab-section">
+                    <div class="dashboard-widgets">
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Compose Segmented Broadcast</h2>
+                            </div>
+                            <form id="broadcastForm" onsubmit="handleBroadcast(event)" class="finance-form">
+                                <div class="form-group">
+                                    <label>Audience cohort target</label>
+                                    <select class="form-control" id="notif-cohort" required>
+                                        <option value="all">Everyone (All Athletes & Partners)</option>
+                                        <option value="all_users">All Registered Athletes (Users)</option>
+                                        <option value="all_partners">All Onboarded Host Partners</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Notification Headline Title</label>
+                                    <input type="text" class="form-control" id="notif-title" placeholder="E.g., Weekend Football Surge Alert!" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Notification Message Body</label>
+                                    <textarea class="form-control" id="notif-body" rows="4" placeholder="Enter notification copy here..." required></textarea>
+                                </div>
+                                <button type="submit" class="btn-primary" style="margin-top: 10px;">Dispatch FCM Push Broadcast</button>
+                            </form>
+                        </div>
+
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>FCM Delivery & Broadcast Logs</h2>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table-simple" id="broadcastsTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Broadcast ID</th>
+                                            <th>Cohort</th>
+                                            <th>Title</th>
+                                            <th>Message</th>
+                                            <th>Delivery Status</th>
+                                            <th>Sent At</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td colspan="6" class="text-center">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: DISPUTES -->
+                <section id="tab-disputes" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>User Booking Disputes Queue</h2>
+                            <button class="btn-primary" onclick="openDisputeCreateModal()">+ Add Dispute</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="disputesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Dispute ID</th>
+                                        <th>Booking Code</th>
+                                        <th>Raised By</th>
+                                        <th>Details</th>
+                                        <th>Resolution</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="7" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: DEMAND (SURGE) -->
+                <section id="tab-demand" class="tab-section">
+                    <div class="finance-editor-card" style="margin-bottom: 25px;">
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Surge Pricing Rules</h2>
+                            </div>
+                            <p class="note-text" style="padding: 0 20px 20px;">Applying a demand tag increases the base booking fee of targeted slots by 50% automatically. Removing it restores slots to base venue prices.</p>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Select Venue to Manage Slots & Apply Surge</h2>
+                        </div>
+                        <div style="padding: 20px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 500;">Active Venue</label>
+                            <select id="slotsVenueSelect" onchange="loadVenueSlots(this.value)" class="form-control">
+                                <option value="">Select a venue...</option>
+                            </select>
+                        </div>
+
+                        <!-- Slots Grid -->
+                        <div style="padding: 0 20px 20px;" id="slotsSection" class="hidden">
+                            <h3 style="margin-bottom: 15px;">Active Slots Grid</h3>
+                            <div class="table-responsive">
+                                <table class="table-simple" id="slotsTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Select</th>
+                                            <th>Slot Date</th>
+                                            <th>Timing</th>
+                                            <th>Current Price</th>
+                                            <th>Demand Tag</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td colspan="6" class="text-center">Choose a venue above to fetch slots</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="slots-actions" style="margin-top: 20px; display: flex; gap: 15px;">
+                                <select id="surgeTagSelect" class="form-control" style="width: auto;">
+                                    <option value="peak_hours">Peak Hours (+50%)</option>
+                                    <option value="high_demand">High Demand (+50%)</option>
+                                    <option value="rainy_day">Rainy Day surge (+50%)</option>
+                                    <option value="premium_slot">Premium Slot (+50%)</option>
+                                </select>
+                                <button class="btn-primary" onclick="applySurge()">Apply Surge Modifier</button>
+                                <button class="btn-danger" onclick="removeSurge()">Remove Tag (Restore Base Price)</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: TOURNAMENTS -->
+                <section id="tab-tournaments" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Tournament Leagues Register</h2>
+                            <button class="btn-primary" onclick="openTournamentCreateModal()">+ Add Tournament</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="tournamentsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Tournament ID</th>
+                                        <th>Tournament Name</th>
+                                        <th>Venue Location</th>
+                                        <th>Sport</th>
+                                        <th>Registration Fee</th>
+                                        <th>Max Participants</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="8" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: REVIEWS -->
+                <section id="tab-reviews" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>User Reviews & Feedback Queue</h2>
+                            <button class="btn-primary" onclick="openReviewCreateModal()">+ Add Review</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="reviewsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Review ID</th>
+                                        <th>User</th>
+                                        <th>Venue</th>
+                                        <th>Rating</th>
+                                        <th>Comment</th>
+                                        <th>Reply</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="7" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: SETTLEMENTS -->
+                <section id="tab-settlements" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Host Partners Settlements</h2>
+                            <button class="btn-primary" onclick="openSettlementCreateModal()">+ Add Settlement</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="settlementsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Settlement ID</th>
+                                        <th>Host Phone</th>
+                                        <th>Period Start</th>
+                                        <th>Period End</th>
+                                        <th>Gross Amount</th>
+                                        <th>Platform Fees</th>
+                                        <th>Net Payout</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="9" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: TRANSACTIONS (PAV LEDGER) -->
+                <section id="tab-pav-ledger" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Outstanding PAV Ledger</h2>
+                            <button class="btn-primary" onclick="openTransactionCreateModal()">+ Add Transaction</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="transactionsLedgerTable">
+                                <thead>
+                                    <tr>
+                                        <th>Txn ID</th>
+                                        <th>Booking Code</th>
+                                        <th>Razorpay Order ID</th>
+                                        <th>Razorpay Payment ID</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Settled Amount</th>
+                                        <th>Date</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="8" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: BROADCASTS -->
+                <section id="tab-broadcasts" class="tab-section">
+                    <div class="dashboard-widgets">
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Compose Push Broadcast</h2>
+                            </div>
+                            <form id="broadcastForm2" onsubmit="handleBroadcast(event)" class="finance-form">
+                                <div class="form-group">
+                                    <label>Cohort Target</label>
+                                    <select class="form-control" id="notif-cohort2" required>
+                                        <option value="all">Everyone (All Athletes & Partners)</option>
+                                        <option value="all_users">All Registered Athletes (Users)</option>
+                                        <option value="all_partners">All Onboarded Host Partners</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Notification Title</label>
+                                    <input type="text" class="form-control" id="notif-title2" placeholder="E.g., Weekend Football Surge Alert!" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Message Body</label>
+                                    <textarea class="form-control" id="notif-body2" rows="4" placeholder="Enter notification copy here..." required></textarea>
+                                </div>
+                                <button type="submit" class="btn-primary" style="margin-top: 10px;">Dispatch Push Notification</button>
+                            </form>
+                        </div>
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h2>Broadcast Delivery Logs</h2>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table-simple" id="broadcastsTable2">
+                                    <thead>
+                                        <tr>
+                                            <th>Broadcast ID</th>
+                                            <th>Cohort</th>
+                                            <th>Title</th>
+                                            <th>Delivery Status</th>
+                                            <th>Sent At</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: BANNERS -->
+                <section id="tab-banners" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Hero Banners Manager</h2>
+                            <button class="btn-primary" onclick="openBannerCreateModal()">+ Add Banner</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="bannersTable">
+                                <thead>
+                                    <tr>
+                                        <th>Banner ID</th>
+                                        <th>Title</th>
+                                        <th>Image Preview Address</th>
+                                        <th>Target App</th>
+                                        <th>Priority</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="7" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: AUDIT LOGS -->
+                <section id="tab-audit-logs" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>System Audit Trails</h2>
+                            <button class="btn-danger" onclick="clearAuditLogs()">Clear Logs</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="auditLogsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Operator</th>
+                                        <th>Action Description</th>
+                                        <th>Resource ID</th>
+                                        <th>Result</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: SETTINGS -->
+                <section id="tab-settings" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Platform Configurations</h2>
+                        </div>
+                        <form id="settingsForm" class="finance-form" style="max-width: 600px;" onsubmit="saveSettings(event)">
+                            <div class="form-group">
+                                <label>Platform Name</label>
+                                <input type="text" class="form-control" id="settings-platformName" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Support Email Address</label>
+                                <input type="email" class="form-control" id="settings-supportEmail" required>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-field">
+                                    <label>Minimum Withdrawal Amount (₹)</label>
+                                    <input type="number" class="form-control" id="settings-minWithdrawal" required>
+                                </div>
+                                <div class="form-field">
+                                    <label>Convenience Fee Rate (₹)</label>
+                                    <input type="number" class="form-control" id="settings-convenienceFee" required>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn-primary">Save Configurations</button>
+                        </form>
+                    </div>
+                </section>
+
+                <!-- TAB: ROLES -->
+                <section id="tab-roles" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Roles & Permissions Profiles</h2>
+                            <button class="btn-primary" onclick="openRoleCreateModal()">+ Add New Role</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="rolesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Role Profile</th>
+                                        <th>Description</th>
+                                        <th>Assigned Admins</th>
+                                        <th>Permissions Scope</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: MILESTONES -->
+                <section id="tab-milestones" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>User Milestones Configuration</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="milestonesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Milestone Name</th>
+                                        <th>Target Condition</th>
+                                        <th>Type</th>
+                                        <th>Assigned Reward</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: REWARDS -->
+                <section id="tab-rewards" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Reward System Rules</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="rewardsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Reward Rule</th>
+                                        <th>Description</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: KYC -->
+                <section id="tab-kyc" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>KYC Verification Queue</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="kycTable">
+                                <thead>
+                                    <tr>
+                                        <th>Partner ID</th>
+                                        <th>Document Type</th>
+                                        <th>File URL</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: APPROVALS -->
+                <section id="tab-approvals" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Venue Listing Approvals</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="venueApprovalsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Venue Name</th>
+                                        <th>Sport Types</th>
+                                        <th>Base Price</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: FEATURED VENUES -->
+                <section id="tab-featured-venues" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Featured Venues Management</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="featuredVenuesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Venue Name</th>
+                                        <th>Sport Types</th>
+                                        <th>Rating</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: REFUNDS -->
+                <section id="tab-refunds" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Refund Requests & Processing Ledger</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="refundsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Transaction ID</th>
+                                        <th>Booking ID</th>
+                                        <th>Amount</th>
+                                        <th>Status</th>
+                                        <th>Created At</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: REASSIGNMENT -->
+                <section id="tab-reassignment" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Slot Reassignment Tool</h2>
+                        </div>
+                        <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px;">
+                            <div class="form-group">
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">Select Booking</label>
+                                <select id="reassignBookingSelect" class="form-control" style="max-width: 400px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                                    <option value="">Select...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">New Slot Date & Time (E.g. 2026-06-25 09:00 - 10:00)</label>
+                                <input type="text" id="reassignNewSlot" class="form-control" placeholder="YYYY-MM-DD HH:MM - HH:MM" style="max-width: 400px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            </div>
+                            <button class="btn-primary" onclick="alert('Slot reassigned successfully!')" style="max-width: 200px;">Process Reassignment</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: COMMISSIONS -->
+                <section id="tab-commissions" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Commission & Tax Configuration</h2>
+                        </div>
+                        <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px;">
+                            <div class="form-group">
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">Global Platform Commission (%)</label>
+                                <input type="number" id="commGlobalPct" class="form-control" value="3.0" step="0.1" style="max-width: 400px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            </div>
+                            <div class="form-group">
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">GST Rate (%)</label>
+                                <input type="number" id="commGstPct" class="form-control" value="18.0" step="0.1" style="max-width: 400px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            </div>
+                            <div class="form-group">
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">Convenience Fee Per Booking (₹)</label>
+                                <input type="number" id="commConvenienceFee" class="form-control" value="10.0" style="max-width: 400px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                            </div>
+                            <button class="btn-primary" onclick="saveCommissionSettings()" style="max-width: 200px;">Save Commission Rates</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: REGISTRATIONS -->
+                <section id="tab-registrations" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Tournament Registration Log</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="registrationsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Registration ID</th>
+                                        <th>Tournament Name</th>
+                                        <th>Team Name</th>
+                                        <th>Fee Amount</th>
+                                        <th>Payment Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: CHAT MONITORING -->
+                <section id="tab-chat-monitoring" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Compliance Message Audit</h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-simple" id="chatMonitoringTable">
+                                <thead>
+                                    <tr>
+                                        <th>Chat Channel</th>
+                                        <th>Last Message Snippet</th>
+                                        <th>Compliance Flag</th>
+                                        <th>Timestamp</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: REPORTS -->
+                <section id="tab-reports" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>System Activity Reports</h2>
+                        </div>
+                        <div style="padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating User Report PDF...')">
+                                <div class="kpi-title">User Signups Report</div>
+                                <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">Summary of user registrations, activity status, locations.</div>
+                            </div>
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating Venue Report PDF...')">
+                                <div class="kpi-title">Venue Listings Report</div>
+                                <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">Analytics of slots utilization, sports, and rating stats.</div>
+                            </div>
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating Booking Report PDF...')">
+                                <div class="kpi-title">Bookings Ledger Report</div>
+                                <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">Full overview of confirmed, pending, and cancelled bookings.</div>
+                            </div>
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating Revenue Report PDF...')">
+                                <div class="kpi-title">Financial Audit Report</div>
+                                <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">GST calculations, commission shares, platform payouts.</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: EXPORTS -->
+                <section id="tab-exports" class="tab-section">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h2>Data Export Manager</h2>
+                        </div>
+                        <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px;">
+                            <div>
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">Select Dataset to Export</label>
+                                <select class="form-control" id="exportDataset" style="max-width: 300px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px;">
+                                    <option value="users">Athletes Directory</option>
+                                    <option value="venues">Venues Directory</option>
+                                    <option value="bookings">Booking Transactions</option>
+                                    <option value="settlements">Partners Settlements</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">Format</label>
+                                <div style="display: flex; gap: 10px;">
+                                    <button class="btn-primary" onclick="alert('Exporting dataset as CSV format...')">Export CSV</button>
+                                    <button class="btn-primary" onclick="alert('Exporting dataset as Excel format...')">Export Excel</button>
+                                    <button class="btn-primary" onclick="alert('Exporting dataset as PDF format...')">Export PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <!-- MODAL: KYC DOCUMENT VIEWER -->
+    <div id="kycModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>KYC Document Inspection</h2>
+                <button class="modal-close" onclick="closeModal('kycModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="kyc-preview-container">
+                    <p style="margin-bottom: 12px; font-size: 0.85rem; color: var(--text-secondary);">Uploaded Document File Mock Address:</p>
+                    <div class="mock-doc-box">
+                        <span id="kycDocUrl">https://s3.aws.amazon.com/kyc/gst_p1.pdf</span>
+                        <a href="#" class="btn-action text-secondary" style="margin-left: 10px;" id="kycDocLink" target="_blank">Open Link</a>
+                    </div>
+                </div>
+
+                <div class="form-group" id="rejectionNoteGroup" style="margin-top: 20px;">
+                    <label>Rejection Reason Details (Required if Rejecting)</label>
+                    <textarea class="form-control" id="kycRejectionNote" rows="3" placeholder="Provide reason details (e.g. illegible certificate file, expired registration date)..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger" onclick="submitKycResolution('rejected')">Reject Document</button>
+                <button class="btn-success" onclick="submitKycResolution('verified')">Verify & Approve</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: SLOT REASSIGNMENT -->
+    <div id="reassignModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>Reassign Slot</h2>
+                <button class="modal-close" onclick="closeModal('reassignModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 15px; color: var(--text-secondary)">Select the replacement slot from the venue's available times:</p>
+                <div class="form-group">
+                    <label>Target Slot</label>
+                    <select class="form-control" id="reassignSlotSelect">
+                        <option value="">Select target slot...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('reassignModal')">Cancel</button>
+                <button class="btn-primary" onclick="submitReassignment()">Confirm Reassignment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: USER CREATE/EDIT -->
+    <div id="userFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="userModalTitle">Manage User</h2>
+                <button class="modal-close" onclick="closeModal('userFormModal')">&times;</button>
+            </div>
+            <form id="userForm" onsubmit="submitUser(event)">
+                <input type="hidden" id="user-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Full Name</label>
+                        <input type="text" class="form-control" id="user-name" placeholder="John Doe" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Email Address</label>
+                        <input type="email" class="form-control" id="user-email" placeholder="john@example.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Phone Number</label>
+                        <input type="text" class="form-control" id="user-phone" placeholder="+919876543210" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="user-status" required>
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                            <option value="Blocked">Blocked</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('userFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: PARTNER CREATE/EDIT -->
+    <div id="partnerFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="partnerModalTitle">Manage Partner</h2>
+                <button class="modal-close" onclick="closeModal('partnerFormModal')">&times;</button>
+            </div>
+            <form id="partnerForm" onsubmit="submitPartner(event)">
+                <input type="hidden" id="partner-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Phone Number</label>
+                        <input type="text" class="form-control" id="partner-phone" placeholder="+919876543210" required>
+                    </div>
+                    <div class="form-group">
+                        <label>KYC Status</label>
+                        <select class="form-control" id="partner-kyc" required>
+                            <option value="unverified">Unverified</option>
+                            <option value="pending">Pending</option>
+                            <option value="verified">Verified</option>
+                            <option value="rejected">Rejected</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Plan Tier</label>
+                        <select class="form-control" id="partner-tier" required>
+                            <option value="free">Free</option>
+                            <option value="premium">Premium</option>
+                            <option value="enterprise">Enterprise</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Total Earnings (₹)</label>
+                        <input type="number" class="form-control" id="partner-earnings" step="0.01" value="0.00" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('partnerFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Partner</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: VENUE CREATE/EDIT -->
+    <div id="venueFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="venueModalTitle">Manage Venue</h2>
+                <button class="modal-close" onclick="closeModal('venueFormModal')">&times;</button>
+            </div>
+            <form id="venueForm" onsubmit="submitVenue(event)">
+                <input type="hidden" id="venue-id">
+                <div class="modal-body">
+                    <div class="form-group" id="venue-partner-group">
+                        <label>Partner (Host)</label>
+                        <select class="form-control" id="venue-partner-id" required>
+                            <!-- Dynamically loaded partners -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Venue Name</label>
+                        <input type="text" class="form-control" id="venue-name" placeholder="Downtown Football Arena" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Sport Types (Comma separated)</label>
+                        <input type="text" class="form-control" id="venue-sports" placeholder="Football, Futsal, Cricket" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Base Price (₹)</label>
+                        <input type="number" class="form-control" id="venue-base-price" step="0.01" placeholder="800.00" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="venue-status" required>
+                            <option value="unlisted">Unlisted</option>
+                            <option value="listed">Listed</option>
+                            <option value="suspended">Suspended</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('venueFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Venue</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: BOOKING CREATE/EDIT -->
+    <div id="bookingFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="bookingModalTitle">Manage Booking</h2>
+                <button class="modal-close" onclick="closeModal('bookingFormModal')">&times;</button>
+            </div>
+            <form id="bookingForm" onsubmit="submitBooking(event)">
+                <input type="hidden" id="booking-id">
+                <div class="modal-body">
+                    <div class="form-group" id="booking-user-group">
+                        <label>User (Athlete)</label>
+                        <select class="form-control" id="booking-user-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group" id="booking-venue-group">
+                        <label>Venue</label>
+                        <select class="form-control" id="booking-venue-id" onchange="loadBookingSlots(this.value)" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group" id="booking-slot-group">
+                        <label>Slot</label>
+                        <select class="form-control" id="booking-slot-id" required>
+                            <!-- Loaded dynamically based on Venue -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Payment Mode</label>
+                        <select class="form-control" id="booking-payment-mode" required>
+                            <option value="card">Card</option>
+                            <option value="upi">UPI</option>
+                            <option value="pay_at_venue">Pay At Venue</option>
+                            <option value="free">Free</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Online Amount Paid (₹)</label>
+                            <input type="number" class="form-control" id="booking-online-amount" step="0.01" value="0.00" required>
+                        </div>
+                        <div class="form-field">
+                            <label>Cash Amount Paid at Venue (₹)</label>
+                            <input type="number" class="form-control" id="booking-venue-amount" step="0.01" value="0.00" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="booking-status" required>
+                            <option value="PENDING">PENDING</option>
+                            <option value="CONFIRMED">CONFIRMED</option>
+                            <option value="CANCELLED">CANCELLED</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('bookingFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Booking</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: TOURNAMENT CREATE/EDIT -->
+    <div id="tournamentFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="tournamentModalTitle">Manage Tournament</h2>
+                <button class="modal-close" onclick="closeModal('tournamentFormModal')">&times;</button>
+            </div>
+            <form id="tournamentForm" onsubmit="submitTournament(event)">
+                <input type="hidden" id="tournament-id">
+                <div class="modal-body">
+                    <div class="form-group" id="tournament-venue-group">
+                        <label>Venue Location</label>
+                        <select class="form-control" id="tournament-venue-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Tournament Name</label>
+                        <input type="text" class="form-control" id="tournament-name" placeholder="APOV Monsoon Futsal Cup" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Sport Type</label>
+                        <input type="text" class="form-control" id="tournament-sport" placeholder="Futsal" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Registration Fee (₹)</label>
+                            <input type="number" class="form-control" id="tournament-fee" step="0.01" placeholder="1500.00" required>
+                        </div>
+                        <div class="form-field">
+                            <label>Max Participants</label>
+                            <input type="number" class="form-control" id="tournament-max-participants" placeholder="32" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="tournament-status" required>
+                            <option value="upcoming">Upcoming</option>
+                            <option value="open">Open</option>
+                            <option value="full">Full</option>
+                            <option value="completed">Completed</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('tournamentFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Tournament</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: REVIEW CREATE/EDIT -->
+    <div id="reviewFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="reviewModalTitle">Manage Review</h2>
+                <button class="modal-close" onclick="closeModal('reviewFormModal')">&times;</button>
+            </div>
+            <form id="reviewForm" onsubmit="submitReview(event)">
+                <input type="hidden" id="review-id">
+                <div class="modal-body">
+                    <div class="form-group" id="review-venue-group">
+                        <label>Venue</label>
+                        <select class="form-control" id="review-venue-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group" id="review-user-group">
+                        <label>User (Athlete)</label>
+                        <select class="form-control" id="review-user-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group" id="review-booking-group">
+                        <label>Booking ID</label>
+                        <select class="form-control" id="review-booking-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Rating (1-5)</label>
+                        <input type="number" class="form-control" id="review-rating" min="1" max="5" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Comment</label>
+                        <textarea class="form-control" id="review-comment" rows="3" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Host/Admin Reply</label>
+                        <textarea class="form-control" id="review-reply" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('reviewFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Review</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: SETTLEMENT CREATE/EDIT -->
+    <div id="settlementFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="settlementModalTitle">Manage Settlement</h2>
+                <button class="modal-close" onclick="closeModal('settlementFormModal')">&times;</button>
+            </div>
+            <form id="settlementForm" onsubmit="submitSettlement(event)">
+                <input type="hidden" id="settlement-id">
+                <div class="modal-body">
+                    <div class="form-group" id="settlement-partner-group">
+                        <label>Partner (Host)</label>
+                        <select class="form-control" id="settlement-partner-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Period Start</label>
+                            <input type="date" class="form-control" id="settlement-start" required>
+                        </div>
+                        <div class="form-field">
+                            <label>Period End</label>
+                            <input type="date" class="form-control" id="settlement-end" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Gross Amount (₹)</label>
+                            <input type="number" class="form-control" id="settlement-gross" step="0.01" required>
+                        </div>
+                        <div class="form-field">
+                            <label>Platform Fee (₹)</label>
+                            <input type="number" class="form-control" id="settlement-fee" step="0.01" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Net Amount (₹)</label>
+                        <input type="number" class="form-control" id="settlement-net" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="settlement-status" required>
+                            <option value="calculating">Calculating</option>
+                            <option value="pending">Pending</option>
+                            <option value="on_hold">On Hold</option>
+                            <option value="settled">Settled</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('settlementFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Settlement</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: TRANSACTION CREATE/EDIT -->
+    <div id="transactionFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="transactionModalTitle">Manage Transaction</h2>
+                <button class="modal-close" onclick="closeModal('transactionFormModal')">&times;</button>
+            </div>
+            <form id="transactionForm" onsubmit="submitTransaction(event)">
+                <input type="hidden" id="transaction-id">
+                <div class="modal-body">
+                    <div class="form-group" id="transaction-booking-group">
+                        <label>Booking ID</label>
+                        <select class="form-control" id="transaction-booking-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Razorpay Order ID</label>
+                        <input type="text" class="form-control" id="transaction-order-id" placeholder="order_Pr123abc" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Razorpay Payment ID</label>
+                        <input type="text" class="form-control" id="transaction-payment-id" placeholder="pay_Pr123abc">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Type</label>
+                            <select class="form-control" id="transaction-type" required>
+                                <option value="capture">Capture</option>
+                                <option value="refund">Refund</option>
+                            </select>
+                        </div>
+                        <div class="form-field">
+                            <label>Status</label>
+                            <select class="form-control" id="transaction-status" required>
+                                <option value="success">Success</option>
+                                <option value="failed">Failed</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Amount (₹)</label>
+                        <input type="number" class="form-control" id="transaction-amount" step="0.01" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('transactionFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Transaction</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: BANNER CREATE/EDIT -->
+    <div id="bannerFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="bannerModalTitle">Manage Banner</h2>
+                <button class="modal-close" onclick="closeModal('bannerFormModal')">&times;</button>
+            </div>
+            <form id="bannerForm" onsubmit="submitBanner(event)">
+                <input type="hidden" id="banner-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" class="form-control" id="banner-title" placeholder="Welcome Bonus Flat ₹100 Off" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Image URL</label>
+                        <input type="text" class="form-control" id="banner-image-url" placeholder="https://..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>Link URL (Optional)</label>
+                        <input type="text" class="form-control" id="banner-link-url" placeholder="https://...">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Target App</label>
+                            <select class="form-control" id="banner-target-app" required>
+                                <option value="user">User App</option>
+                                <option value="partner">Partner App</option>
+                                <option value="all">All Apps</option>
+                            </select>
+                        </div>
+                        <div class="form-field">
+                            <label>Display Order</label>
+                            <input type="number" class="form-control" id="banner-order" placeholder="1" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="banner-active" required>
+                            <option value="true">Active</option>
+                            <option value="false">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('bannerFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Banner</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: DISPUTE CREATE/EDIT -->
+    <div id="disputeFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="disputeModalTitle">Manage Dispute</h2>
+                <button class="modal-close" onclick="closeModal('disputeFormModal')">&times;</button>
+            </div>
+            <form id="disputeForm" onsubmit="submitDispute(event)">
+                <input type="hidden" id="dispute-id">
+                <div class="modal-body">
+                    <div class="form-group" id="dispute-booking-group">
+                        <label>Booking ID</label>
+                        <select class="form-control" id="dispute-booking-id" required>
+                            <!-- Loaded dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Raised By</label>
+                        <select class="form-control" id="dispute-raised-by" required>
+                            <option value="user">User</option>
+                            <option value="partner">Partner</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Details</label>
+                        <textarea class="form-control" id="dispute-details" rows="3" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="dispute-status" required>
+                            <option value="open">Open</option>
+                            <option value="under_review">Under Review</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="escalated">Escalated</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('disputeFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Dispute</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: ROLE CREATE/EDIT -->
+    <div id="roleFormModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="roleModalTitle">Manage Role</h2>
+                <button class="modal-close" onclick="closeModal('roleFormModal')">&times;</button>
+            </div>
+            <form id="roleForm" onsubmit="submitRole(event)">
+                <input type="hidden" id="role-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Role Profile Name</label>
+                        <input type="text" class="form-control" id="role-name" placeholder="Super Admin" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <input type="text" class="form-control" id="role-description" placeholder="Full system access" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Permissions Scope</label>
+                        <select class="form-control" id="role-permissions" required>
+                            <option value="ALL_ACCESS">ALL_ACCESS</option>
+                            <option value="FINANCE_READ_WRITE">FINANCE_READ_WRITE</option>
+                            <option value="OPERATIONS_READ_ONLY">OPERATIONS_READ_ONLY</option>
+                            <option value="OPERATIONS_READ_WRITE">OPERATIONS_READ_WRITE</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('roleFormModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Role</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: COUPON CREATE/EDIT -->
+    <div id="couponModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>Manage Coupon Code</h2>
+                <button class="modal-close" onclick="closeModal('couponModal')">&times;</button>
+            </div>
+            <form id="couponForm" onsubmit="submitCoupon(event)">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Coupon Code</label>
+                        <input type="text" class="form-control" id="coupon-code" placeholder="E.g., SUPER200" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Discount Type</label>
+                            <select class="form-control" id="coupon-type" required>
+                                <option value="flat">Flat Cash Discount (₹)</option>
+                                <option value="percent">Percentage Off (%)</option>
+                            </select>
+                        </div>
+                        <div class="form-field">
+                            <label>Discount Value</label>
+                            <input type="number" class="form-control" id="coupon-value" step="0.01" placeholder="E.g., 100 or 15" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Max Discount (₹, Optional)</label>
+                            <input type="number" class="form-control" id="coupon-max-disc" step="0.01" placeholder="E.g., 300">
+                        </div>
+                        <div class="form-field">
+                            <label>Min Order Value (₹)</label>
+                            <input type="number" class="form-control" id="coupon-min-order" step="0.01" placeholder="E.g., 500" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Total Usage Limit</label>
+                        <input type="number" class="form-control" id="coupon-limit" placeholder="E.g., 500" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-field">
+                            <label>Valid From</label>
+                            <input type="date" class="form-control" id="coupon-from" required>
+                        </div>
+                        <div class="form-field">
+                            <label>Valid Until</label>
+                            <input type="date" class="form-control" id="coupon-until" required>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeModal('couponModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Coupon</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- RIGHT-SIDE USER ACCOUNT DRAWER -->
+    <div id="userDrawerBackdrop" class="drawer-backdrop" onclick="closeUserDrawer()"></div>
+    <div id="userDetailDrawer" class="detail-drawer">
+        <div class="drawer-header">
+            <h2 class="drawer-title">User Account Details</h2>
+            <button class="drawer-close-btn" onclick="closeUserDrawer()">&times;</button>
+        </div>
+        <div class="drawer-body" id="drawerBody">
+            <div class="drawer-loading">Select an athlete row to view account file details.</div>
+        </div>
+    </div>
+
+    <!-- Chart.js CDN -->
+    <script src="chart.js"></script>
+    <!-- Core App Logic -->
+    <script src="app.js"></script>
+</body>
+</html>

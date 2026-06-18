@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APOV Admin Portal - Login</title>
+    <!-- Google Fonts Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-color: #0A0A0B;
+            --card-bg: #111113;
+            --border-color: #27272A;
+            --text-primary: #FAFAFA;
+            --text-secondary: #A1A1AA;
+            --text-muted: #52525B;
+            --accent-primary: #3B82F6;
+            --error-color: #EF4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 40px 32px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .logo {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        .subtitle {
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px 16px;
+            background: #09090B;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.92rem;
+            outline: none;
+            transition: border-color 150ms ease, box-shadow 150ms ease;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 12px;
+            background: var(--text-primary);
+            border: none;
+            border-radius: 8px;
+            color: var(--bg-color);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 150ms ease, transform 150ms ease;
+            margin-top: 8px;
+        }
+
+        .btn-submit:hover {
+            background: #E4E4E7;
+        }
+
+        .btn-submit:active {
+            transform: scale(0.98);
+        }
+
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid var(--error-color);
+            padding: 10px 14px;
+            border-radius: 6px;
+            color: var(--error-color);
+            font-size: 0.82rem;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .footer-note {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            letter-spacing: 0.2px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-container">
+        <div class="login-card">
+            <div class="header">
+                <div class="logo">ATHLETE'S POV</div>
+                <div class="subtitle">Admin Management Console</div>
+            </div>
+
+            <div id="errorBox" class="error-message"></div>
+
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label for="email">Admin Email</label>
+                    <input type="email" id="email" class="form-control" placeholder="admin@athelete.pov" required value="admin@athelete.pov">
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" class="form-control" placeholder="••••••••" required value="admin123">
+                </div>
+
+                <button type="submit" class="btn-submit">Sign In</button>
+            </form>
+
+            <div class="footer-note">
+                Secured Administrative Portal.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        if (localStorage.getItem('adminToken')) {
+            window.location.href = 'index.html';
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorBox = document.getElementById('errorBox');
+            const submitBtn = document.querySelector('.btn-submit');
+
+            errorBox.style.display = 'none';
+            submitBtn.textContent = 'Authenticating...';
+            submitBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const json = await response.json();
+
+                if (!response.ok || !json.success) {
+                    throw new Error(json.error?.message || 'Authentication failed');
+                }
+
+                localStorage.setItem('adminToken', json.data.token);
+                localStorage.setItem('adminEmail', email);
+
+                window.location.href = 'index.html';
+            } catch (err) {
+                errorBox.textContent = err.message;
+                errorBox.style.display = 'block';
+                submitBtn.textContent = 'Sign In';
+                submitBtn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
