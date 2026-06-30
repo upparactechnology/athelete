@@ -426,7 +426,7 @@ export class ClientService {
                 amount: booking.online_amount
             }
         });
-        return { orderId, amount: booking.online_amount, currency: "INR" };
+        return { orderId, amount: booking.online_amount, currency: "INR", key: settings.razorpayKeyId };
     }
     static async verifyPayment(bookingId, razorpayOrderId, razorpayPaymentId) {
         const txn = await prisma.transaction.findFirst({

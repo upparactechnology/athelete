@@ -445,7 +445,7 @@ export class ClientService {
       }
     });
 
-    return { orderId, amount: booking.online_amount, currency: "INR" };
+    return { orderId, amount: booking.online_amount, currency: "INR", key: settings.razorpayKeyId };
   }
 
   public static async verifyPayment(bookingId: string, razorpayOrderId: string, razorpayPaymentId: string) {

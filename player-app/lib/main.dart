@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'websocket_sync.dart';
 import 'api_service.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 class AppColors {
   static const Color pink = Color(0xFFFF5C93);
@@ -1432,6 +1433,62 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   double _discount = 0.0;
   String? _appliedCouponCode;
 
+  late Razorpay _razorpay;
+  String? _currentBookingId;
+  String? _currentOrderId;
+
+  @override
+  void initState() {
+    super.initState();
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
+  }
+
+  @override
+  void dispose() {
+    _couponController.dispose();
+    _razorpay.clear();
+    super.dispose();
+  }
+
+  void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    final bookingId = _currentBookingId;
+    final orderId = _currentOrderId ?? response.orderId;
+    if (bookingId == null || orderId == null) return;
+
+    setState(() => _isLoading = true);
+    final verifyRes = await ApiService.verifyPayment(bookingId, orderId, response.paymentId ?? '');
+    if (verifyRes['success'] == true) {
+      final finalBooking = verifyRes['data'];
+      finalBooking['slot'] = widget.slot;
+      finalBooking['venue'] = widget.venue;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => ConfirmationScreen(booking: finalBooking),
+        ),
+      );
+    } else {
+      AppToast.show(context, "Payment verification failed", isError: true);
+    }
+    setState(() => _isLoading = false);
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) async {
+    final bookingId = _currentBookingId;
+    if (bookingId != null) {
+      setState(() => _isLoading = true);
+      await ApiService.cancelBooking(bookingId);
+      setState(() => _isLoading = false);
+    }
+    AppToast.show(context, "Payment Failed/Cancelled: ${response.message ?? ''}", isError: true);
+  }
+
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    AppToast.show(context, "External wallet selected: ${response.walletName}");
+  }
+
   void _applyCoupon() async {
     final code = _couponController.text.trim();
     if (code.isEmpty) return;
@@ -1461,162 +1518,46 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     final booking = bookingRes['data'];
     final bookingId = booking['booking_id'];
+    _currentBookingId = bookingId;
 
-    if (mode == "pay_at_venue") {
-      setState(() => _isLoading = false);
-      booking['slot'] = widget.slot;
-      booking['venue'] = widget.venue;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => ConfirmationScreen(booking: booking),
-        ),
-      );
-    } else {
-      final payInit = await ApiService.initiatePayment(bookingId);
-      final orderId = payInit['orderId'];
+    final payInit = await ApiService.initiatePayment(bookingId);
+    final orderId = payInit['data']?['orderId'] ?? 'order_${MathUtils.randomString(12)}';
+    final razorpayKey = payInit['data']?['key'] ?? 'rzp_test_Lp542L8X1v9n5R';
+    _currentOrderId = orderId;
 
-      await Future.delayed(const Duration(seconds: 1));
+    // Load profile for prefill info
+    String email = "athlete@example.com";
+    String phone = "9999999999";
+    try {
+      final profile = await ApiService.getProfile();
+      if (profile['success'] == true && profile['data'] != null) {
+        email = profile['data']['email'] ?? email;
+        phone = profile['data']['phone_number'] ?? phone;
+      }
+    } catch (_) {}
 
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2638), // Razorpay brand color theme
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Image.network(
-                      'https://razorpay.com/assets/razorpay-glyph.svg',
-                      height: 28,
-                      errorBuilder: (c, e, s) => const Icon(Icons.payment_rounded, color: Colors.blue, size: 28),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        "TEST MODE",
-                        style: GoogleFonts.sora(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    )
-                  ],
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  widget.venue['name'] ?? 'Sports Arena',
-                  style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  "Order ID: $orderId",
-                  style: GoogleFonts.sora(fontSize: 12, color: Colors.white70),
-                ),
-                const Divider(color: Colors.white24, height: 28),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text("Total Amount", style: GoogleFonts.sora(color: Colors.white70, fontSize: 13)),
-                    Text(
-                      "₹${booking['online_amount']}",
-                      style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                // Payment Method Simulation options
-                Text("Select Simulated Payment Method:", style: GoogleFonts.sora(color: Colors.white70, fontSize: 12)),
-                const SizedBox(height: 12),
-                _buildRazorpayMethod(Icons.qr_code_rounded, "UPI / GooglePay"),
-                _buildRazorpayMethod(Icons.credit_card_rounded, "Card (Visa/Mastercard)"),
-                _buildRazorpayMethod(Icons.account_balance_rounded, "Netbanking"),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                          setState(() => _isLoading = false);
-                        },
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.white30),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                        child: Text("Cancel", style: GoogleFonts.sora(color: Colors.white70)),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          Navigator.of(context).pop();
-                          final mockPayId = "pay_${MathUtils.randomString(14)}";
-                          final verifyRes = await ApiService.verifyPayment(bookingId, orderId, mockPayId);
-                          if (verifyRes['success'] == true) {
-                            final finalBooking = verifyRes['data'];
-                            finalBooking['slot'] = widget.slot;
-                            finalBooking['venue'] = widget.venue;
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(
-                                builder: (context) => ConfirmationScreen(booking: finalBooking),
-                              ),
-                            );
-                          } else {
-                            AppToast.show(context, "Payment verification failed", isError: true);
-                          }
-                          setState(() => _isLoading = false);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                        child: Text("Pay Success", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
-                      ),
-                    )
-                  ],
-                )
-              ],
-            ),
-          ),
-        ),
-      );
+    setState(() => _isLoading = false);
+
+    final options = {
+      'key': razorpayKey,
+      'amount': (double.parse(booking['online_amount'].toString()) * 100).toInt(),
+      'name': 'Athlete App',
+      'description': widget.venue['name'] ?? 'Booking Payment',
+      'order_id': orderId,
+      'prefill': {
+        'contact': phone,
+        'email': email,
+      },
+      'external': {
+        'wallets': ['paytm']
+      }
+    };
+
+    try {
+      _razorpay.open(options);
+    } catch (e) {
+      AppToast.show(context, "Error opening Razorpay: $e", isError: true);
     }
-  }
-
-  Widget _buildRazorpayMethod(IconData icon, String label) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.blueAccent, size: 20),
-          const SizedBox(width: 12),
-          Text(label, style: GoogleFonts.sora(color: Colors.white, fontSize: 13)),
-          const Spacer(),
-          const Icon(Icons.chevron_right_rounded, color: Colors.white30, size: 18),
-        ],
-      ),
-    );
   }
 
   @override
