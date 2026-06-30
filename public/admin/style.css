@@ -11,8 +11,8 @@
     --text-secondary: #A1A1AA;
     --text-muted: #52525B;
     
-    --accent-primary: #3B82F6;
-    --accent-glow: rgba(59, 130, 246, 0.15);
+    --accent-primary: #FF5C93;
+    --accent-glow: rgba(255, 92, 147, 0.15);
     
     --success-color: #10B981;
     --success-glow: rgba(16, 185, 129, 0.1);
@@ -44,8 +44,8 @@
     --text-secondary: #71717A;
     --text-muted: #A1A1AA;
     
-    --accent-primary: #2563EB;
-    --accent-glow: rgba(37, 99, 235, 0.1);
+    --accent-primary: #FF5C93;
+    --accent-glow: rgba(255, 92, 147, 0.1);
     
     --success-color: #059669;
     --success-glow: rgba(5, 150, 105, 0.1);
@@ -67,13 +67,14 @@
 }
 
 body {
-    font-family: 'Inter', sans-serif;
-    background-color: var(--bg-color);
+    font-family: 'Sora', sans-serif;
+    background: radial-gradient(at 0% 0%, #17121b 0px, transparent 50%), radial-gradient(at 100% 0%, #11101b 0px, transparent 50%), var(--bg-color);
     color: var(--text-primary);
     min-height: 100vh;
     overflow-x: hidden;
-    transition: background-color var(--transition-speed) ease, color var(--transition-speed) ease;
+    transition: background var(--transition-speed) ease, color var(--transition-speed) ease;
 }
+
 
 /* Scrollbars */
 ::-webkit-scrollbar {
@@ -685,12 +686,15 @@ body {
 
 /* Cards & Containers */
 .glass-card {
-    background-color: var(--card-bg);
-    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: var(--border-radius-large);
     padding: 24px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
 }
+
 
 .glass-card.error-border {
     border-color: var(--error-color);
@@ -1286,3 +1290,42 @@ textarea.form-control {
     height: 220px;
     width: 100%;
 }
+
+/* Glassmorphic Blur Blobs */
+.blob {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(140px);
+    z-index: -1;
+    opacity: 0.12;
+    pointer-events: none;
+    animation: floatBlob 25s infinite alternate ease-in-out;
+}
+.blob-1 {
+    top: -15%;
+    left: 15%;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, var(--accent-primary) 0%, transparent 80%);
+}
+.blob-2 {
+    bottom: -15%;
+    right: 10%;
+    width: 700px;
+    height: 700px;
+    background: radial-gradient(circle, #8B5CF6 0%, transparent 80%);
+    animation-delay: -5s;
+}
+.blob-3 {
+    top: 40%;
+    left: -10%;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, #3B82F6 0%, transparent 80%);
+    animation-delay: -10s;
+}
+@keyframes floatBlob {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(60px, 60px) scale(1.15); }
+}
+

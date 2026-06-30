@@ -110,4 +110,8 @@ adminRoutes.post('/roles', AdminController.createRole);
 adminRoutes.patch('/roles/:id', AdminController.updateRole);
 adminRoutes.delete('/roles/:id', AdminController.deleteRole);
 
+// Support Chat History & Reply
+adminRoutes.get('/chat/messages', AdminController.getAllChatMessages);
+
 export default adminRoutes;
+

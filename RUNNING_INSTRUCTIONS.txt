@@ -1,0 +1,68 @@
+========================================================================
+             ATHLETE'S POV (APOV) RUNNING INSTRUCTIONS
+========================================================================
+
+This file details how to run the Database, Cache, Backend API Server,
+Admin Portal, and Mobile Applications (Player-App and Partner-App) using 
+the local IP address 192.168.1.8.
+
+------------------------------------------------------------------------
+1. PREREQUISITES (Docker Database & Cache)
+------------------------------------------------------------------------
+Make sure Docker is running on your machine and start the Postgres
+database and Redis cache:
+  Command:
+    docker compose up -d
+
+  Verify Status:
+    docker compose ps
+
+------------------------------------------------------------------------
+2. BACKEND API SERVER & ADMIN PORTAL
+------------------------------------------------------------------------
+The backend compiles TypeScript and runs the Express API server on port 4000.
+
+  Start Command:
+    npm run dev
+
+  Endpoints & Access:
+    - Backend API Base URL:  http://192.168.1.8:4000/api
+    - Admin Portal Login:    http://192.168.1.8:4000/admin/login.html
+                             (or http://localhost:4000/admin/login.html)
+    - Admin Credentials:     Email: admin@athelete.pov
+                             Password: admin (pre-seeded)
+
+------------------------------------------------------------------------
+3. FRONTEND PLAYER APP (Flutter)
+------------------------------------------------------------------------
+Located in the `player-app` folder. The app is pre-configured to communicate
+with the backend via http://192.168.1.8:4000/api.
+
+  Steps:
+    1. Open a terminal and navigate to:
+       cd player-app
+    2. Check connected devices:
+       flutter devices
+    3. Run on your preferred target (e.g. Android device, Chrome, or Windows):
+       flutter run -d <DEVICE_ID>
+
+------------------------------------------------------------------------
+4. FRONTEND PARTNER APP (Flutter)
+------------------------------------------------------------------------
+Located in the `partner_app` folder. The app is pre-configured to communicate
+with the backend via http://192.168.1.8:4000/api.
+
+  Steps:
+    1. Open a terminal and navigate to:
+       cd partner_app
+    2. Run on your preferred target:
+       flutter run -d <DEVICE_ID>
+
+------------------------------------------------------------------------
+5. DYNAMIC PORT ROUTING / TROUBLESHOOTING (For Mobile Devices)
+------------------------------------------------------------------------
+If running on a physical Android device connected via USB debugging, you can
+tunnel traffic from the phone to your PC's localhost:
+  Command:
+    adb reverse tcp:4000 tcp:4000
+========================================================================

@@ -19,10 +19,14 @@ async function bootstrap() {
     await seedDatabase();
 
     // 4. Start listening
-    app.listen(env.PORT, () => {
+    const server = app.listen(env.PORT, () => {
       logger.info(`Athlete's POV Server is listening on http://localhost:${env.PORT}`);
       logger.info(`Admin Portal available at http://localhost:${env.PORT}/admin/login.html`);
     });
+
+    // 5. Initialize WebSocket Server
+    const { WebSocketService } = await import('./shared/services/websocket.js');
+    WebSocketService.init(server);
   } catch (err) {
     logger.error("Startup failed:", err);
     process.exit(1);

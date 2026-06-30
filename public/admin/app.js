@@ -19,6 +19,7 @@ let editingCouponId = null;
 
 // User table sorting & multi-selection state
 let loadedUsers = [];
+let loadedVenues = [];
 let userSortField = '';
 let userSortAsc = true;
 let selectedUserIds = new Set();
@@ -68,6 +69,9 @@ window.addEventListener('DOMContentLoaded', () => {
     } else {
         switchTab('dashboard');
     }
+
+    // Establish WebSocket Connection for real-time synchronization
+    initRealTimeSync();
 });
 
 // Watch for manual URL hash updates or navigation changes
@@ -453,6 +457,7 @@ async function submitKycResolution(status) {
 async function loadVenuesData() {
     try {
         const venues = await apiCall('/api/admin/venues');
+        loadedVenues = venues;
         const tbody = document.querySelector('#venuesTable tbody');
         tbody.innerHTML = '';
 
@@ -463,8 +468,15 @@ async function loadVenuesData() {
 
         venues.forEach(v => {
             let statusBadge = 'neutral';
-            if (v.status === 'listed') statusBadge = 'success';
-            if (v.status === 'suspended') statusBadge = 'danger';
+            let displayStatus = v.status;
+            if (v.status === 'listed') {
+                statusBadge = 'success';
+            } else if (v.status === 'suspended') {
+                statusBadge = 'danger';
+            } else if (v.status === 'unlisted') {
+                statusBadge = 'pending';
+                displayStatus = 'pending approval';
+            }
 
             const row = document.createElement('tr');
             row.innerHTML = `
@@ -473,12 +485,13 @@ async function loadVenuesData() {
                 <td>${v.sport_types.join(', ')}</td>
                 <td>₹${Number(v.base_price).toFixed(2)}</td>
                 <td>★ ${Number(v.avg_rating).toFixed(1)}</td>
-                <td><span class="badge ${statusBadge}">${v.status}</span></td>
+                <td><span class="badge ${statusBadge}">${displayStatus}</span></td>
                 <td>
                     <input type="checkbox" class="featured-toggle" ${v.status === 'listed' ? '' : 'disabled'} onchange="toggleFeatured('${v.venue_id}', this.checked)">
                 </td>
                 <td>
                     <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+                        <button class="btn-action text-info" onclick="viewVenueDetails('${v.venue_id}')">View</button>
                         <button class="btn-action text-success" ${v.status === 'listed' ? 'disabled' : ''} onclick="updateVenueStatus('${v.venue_id}', 'listed')">Approve</button>
                         <button class="btn-action text-danger" ${v.status === 'suspended' ? 'disabled' : ''} onclick="updateVenueStatus('${v.venue_id}', 'suspended')">Suspend</button>
                         <button class="btn-action text-secondary" onclick="openVenueEditModal('${v.venue_id}', '${v.partner_id}', '${escapeHtml(v.name)}', '${escapeHtml(v.sport_types.join(', '))}', ${Number(v.base_price)}, '${v.status}')">Edit</button>
@@ -536,7 +549,7 @@ async function loadBookingsData() {
                 <td>${b.venue.name}</td>
                 <td>${date} <br><small>${b.slot.start_time} - ${b.slot.end_time}</small></td>
                 <td>₹${Number(b.online_amount).toFixed(2)}</td>
-                <td>₹${Number(b.venue_amount).toFixed(2)}</td>
+                <td>₹${b.status === 'CONFIRMED' ? Number(b.venue_amount).toFixed(2) : '0.00'}</td>
                 <td><span class="badge ${statusClass}">${b.status}</span></td>
                 <td>
                     <div style="display: flex; gap: 5px; flex-wrap: wrap;">
@@ -1651,10 +1664,24 @@ async function clearAuditLogs() {
 async function loadSettingsData() {
     try {
         const settings = await apiCall('/api/admin/settings');
-        document.getElementById('settings-platformName').value = settings.platformName;
-        document.getElementById('settings-supportEmail').value = settings.supportEmail;
-        document.getElementById('settings-minWithdrawal').value = settings.minWithdrawal;
-        document.getElementById('settings-convenienceFee').value = settings.convenienceFee;
+        document.getElementById('settings-platformName').value = settings.platformName || '';
+        document.getElementById('settings-supportEmail').value = settings.supportEmail || '';
+        document.getElementById('settings-minWithdrawal').value = settings.minWithdrawal || '';
+        document.getElementById('settings-convenienceFee').value = settings.convenienceFee || '';
+        
+        document.getElementById('settings-razorpayKeyId').value = settings.razorpayKeyId || '';
+        document.getElementById('settings-razorpayKeySecret').value = settings.razorpayKeySecret || '';
+        document.getElementById('settings-razorpayWebhookSecret').value = settings.razorpayWebhookSecret || '';
+        document.getElementById('settings-smsApiKey').value = settings.smsApiKey || '';
+        document.getElementById('settings-smsSenderId').value = settings.smsSenderId || '';
+        document.getElementById('settings-smtpHost').value = settings.smtpHost || '';
+        document.getElementById('settings-smtpPort').value = settings.smtpPort || '';
+        document.getElementById('settings-smtpUser').value = settings.smtpUser || '';
+        document.getElementById('settings-smtpPass').value = settings.smtpPass || '';
+        document.getElementById('settings-smtpSecure').checked = !!settings.smtpSecure;
+        document.getElementById('settings-smtpFrom').value = settings.smtpFrom || '';
+        document.getElementById('settings-useSmtpForOtp').checked = !!settings.useSmtpForOtp;
+        document.getElementById('settings-adminApiKey').value = settings.adminApiKey || '';
     } catch (err) {
         console.error(err);
     }
@@ -1666,19 +1693,57 @@ async function saveSettings(e) {
     const supportEmail = document.getElementById('settings-supportEmail').value;
     const minWithdrawal = Number(document.getElementById('settings-minWithdrawal').value);
     const convenienceFee = Number(document.getElementById('settings-convenienceFee').value);
+    
+    const razorpayKeyId = document.getElementById('settings-razorpayKeyId').value;
+    const razorpayKeySecret = document.getElementById('settings-razorpayKeySecret').value;
+    const razorpayWebhookSecret = document.getElementById('settings-razorpayWebhookSecret').value;
+    const smsApiKey = document.getElementById('settings-smsApiKey').value;
+    const smsSenderId = document.getElementById('settings-smsSenderId').value;
+    
+    const smtpHost = document.getElementById('settings-smtpHost').value;
+    const smtpPort = Number(document.getElementById('settings-smtpPort').value);
+    const smtpUser = document.getElementById('settings-smtpUser').value;
+    const smtpPass = document.getElementById('settings-smtpPass').value;
+    const smtpSecure = document.getElementById('settings-smtpSecure').checked;
+    const smtpFrom = document.getElementById('settings-smtpFrom').value;
+    const useSmtpForOtp = document.getElementById('settings-useSmtpForOtp').checked;
+    
+    const adminApiKey = document.getElementById('settings-adminApiKey').value;
 
     try {
         await apiCall('/api/admin/settings', 'POST', {
             platformName,
             supportEmail,
             minWithdrawal,
-            convenienceFee
+            convenienceFee,
+            razorpayKeyId,
+            razorpayKeySecret,
+            razorpayWebhookSecret,
+            smsApiKey,
+            smsSenderId,
+            smtpHost,
+            smtpPort,
+            smtpUser,
+            smtpPass,
+            smtpSecure,
+            smtpFrom,
+            useSmtpForOtp,
+            adminApiKey
         });
         alert("Platform configurations updated successfully.");
         loadSettingsData();
     } catch (err) {
         console.error(err);
     }
+}
+
+function generateApiKey() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let token = 'apv_admin_';
+    for (let i = 0; i < 32; i++) {
+        token += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    document.getElementById('settings-adminApiKey').value = token;
 }
 
 async function loadRolesData() {
@@ -1887,6 +1952,7 @@ async function openTournamentCreateModal() {
     document.getElementById('tournamentModalTitle').textContent = "Create New Tournament";
     document.getElementById('tournamentForm').reset();
     document.getElementById('tournament-id').value = '';
+    document.getElementById('tournament-venue-id').required = true;
     document.getElementById('tournament-venue-group').classList.remove('hidden');
     await loadVenuesDropdown('tournament-venue-id');
     openModal('tournamentFormModal');
@@ -1895,6 +1961,7 @@ async function openTournamentCreateModal() {
 async function openTournamentEditModal(id, venueId, name, sport, fee, maxParticipants, status) {
     document.getElementById('tournamentModalTitle').textContent = "Edit Tournament Details";
     document.getElementById('tournament-id').value = id;
+    document.getElementById('tournament-venue-id').required = false;
     document.getElementById('tournament-venue-group').classList.add('hidden');
     document.getElementById('tournament-name').value = name;
     document.getElementById('tournament-sport').value = sport;
@@ -2544,7 +2611,7 @@ async function loadApprovalsData() {
                     <td><strong>${v.name}</strong></td>
                     <td>${v.sport_types.join(', ')}</td>
                     <td>₹${Number(v.base_price).toFixed(2)}</td>
-                    <td><span class="badge warning">Pending Approval</span></td>
+                    <td><span class="badge pending">Pending Approval</span></td>
                     <td>
                         <div style="display: flex; gap: 5px;">
                             <button class="btn-action text-success" onclick="updateVenueApproval('${v.venue_id}', 'listed')">Approve & List</button>
@@ -2568,6 +2635,87 @@ async function updateVenueApproval(venueId, status) {
     } catch (err) {
         console.error(err);
     }
+}
+
+function viewVenueDetails(venueId) {
+    const venue = loadedVenues.find(v => v.venue_id === venueId);
+    if (!venue) return;
+
+    const body = document.getElementById('venueDetailsBody');
+    if (!body) return;
+
+    // Render amenities
+    const amenitiesHtml = venue.amenities && venue.amenities.length > 0
+        ? venue.amenities.map(a => `<span class="badge success" style="margin-right: 5px; margin-bottom: 5px;">${a}</span>`).join('')
+        : '<span class="text-secondary">No amenities specified</span>';
+
+    // Render images
+    const imagesHtml = venue.images && venue.images.length > 0
+        ? `<div style="display: flex; gap: 10px; overflow-x: auto; padding: 10px 0;">
+             ${venue.images.map(img => {
+                 const isLocalPath = img.startsWith('/') || img.startsWith('file://');
+                 const displayUrl = isLocalPath ? img : img;
+                 return `<div style="flex: 0 0 150px; height: 100px; border-radius: 6px; overflow: hidden; background: #222; border: 1px solid #333; position: relative;">
+                           <img src="${displayUrl}" onerror="this.src='placeholder.png'; this.onerror=null;" style="width: 100%; height: 100%; object-fit: cover;" />
+                           <span style="font-size: 8px; position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: #fff; padding: 2px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${img.split('/').pop()}</span>
+                         </div>`;
+             }).join('')}
+           </div>`
+        : '<span class="text-secondary">No images uploaded</span>';
+
+    // Render stats
+    const bookingsCount = venue._count ? venue._count.bookings || 0 : 0;
+    const slotsCount = venue._count ? venue._count.slots || 0 : 0;
+
+    body.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                <div>
+                    <h3 style="font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; font-family: 'Outfit', sans-serif; color: #fff;">${venue.name}</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem;">ID: <code>${venue.venue_id}</code></p>
+                </div>
+                <span class="badge ${venue.status === 'listed' ? 'success' : (venue.status === 'suspended' ? 'danger' : 'pending')}">${venue.status}</span>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div>
+                    <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">General Details</h4>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Sport Types:</td><td style="padding: 6px 0; font-weight: 500;">${venue.sport_types.join(', ')}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Base Price:</td><td style="padding: 6px 0; font-weight: 500;">₹${Number(venue.base_price).toFixed(2)}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Slot Mode:</td><td style="padding: 6px 0; font-weight: 500;">${venue.slot_mode}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Avg Rating:</td><td style="padding: 6px 0; font-weight: 500;">★ ${Number(venue.avg_rating).toFixed(1)}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Total Bookings:</td><td style="padding: 6px 0; font-weight: 500;">${bookingsCount}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Total Slots:</td><td style="padding: 6px 0; font-weight: 500;">${slotsCount}</td></tr>
+                    </table>
+                </div>
+                <div>
+                    <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Contact & Location</h4>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Host Phone:</td><td style="padding: 6px 0; font-weight: 500;">${venue.partner.phone_number}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Contact Phone:</td><td style="padding: 6px 0; font-weight: 500;">${venue.contact_phone || 'N/A'}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Address:</td><td style="padding: 6px 0; font-weight: 500;">${venue.address || 'N/A'}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Latitude:</td><td style="padding: 6px 0; font-weight: 500;">${venue.latitude || 'N/A'}</td></tr>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Longitude:</td><td style="padding: 6px 0; font-weight: 500;">${venue.longitude || 'N/A'}</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div>
+                <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Amenities</h4>
+                <div style="display: flex; flex-wrap: wrap; margin-top: 5px; gap: 5px;">
+                    ${amenitiesHtml}
+                </div>
+            </div>
+
+            <div>
+                <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Venue Images</h4>
+                ${imagesHtml}
+            </div>
+        </div>
+    `;
+
+    openModal('venueDetailsModal');
 }
 
 async function loadFeaturedVenuesData() {
@@ -2716,44 +2864,139 @@ async function loadRegistrationsData() {
     }
 }
 
+let chatChannels = {}; // userId -> { userName: string, messages: [] }
+let activeChatUserId = null;
+
 async function loadChatMonitoringData() {
     try {
-        const tbody = document.querySelector('#chatMonitoringTable tbody');
-        if (tbody) {
-            tbody.innerHTML = `
-                <tr>
-                    <td>User (John) ↔ Partner (Decathlon)</td>
-                    <td>"Is the court open at 6 AM?"</td>
-                    <td><span class="badge success">Clean</span></td>
-                    <td>2026-06-18 10:15</td>
-                    <td>
-                        <button class="btn-action text-accent" onclick="alert('Viewing chat channel details')">Audit</button>
-                    </td>
-                </tr>
-                <tr>
-                    <td>User (Sania) ↔ Partner (SportsArena)</td>
-                    <td>"Refund my money now or I will sue"</td>
-                    <td><span class="badge warning">Escalated</span></td>
-                    <td>2026-06-18 11:22</td>
-                    <td>
-                        <button class="btn-action text-accent" onclick="alert('Viewing chat channel details')">Audit</button>
-                    </td>
-                </tr>
-                <tr>
-                    <td>User (Rahul) ↔ Partner (Noida Complex)</td>
-                    <td>"Call me on 9988776655 for direct discount"</td>
-                    <td><span class="badge danger">Flagged (Spam)</span></td>
-                    <td>2026-06-18 12:40</td>
-                    <td>
-                        <button class="btn-action text-danger" onclick="alert('User blocked from chat compliance')">Block</button>
-                    </td>
-                </tr>
-            `;
+        const messages = await apiCall('/api/admin/chat/messages');
+        if (messages) {
+            chatChannels = {};
+            
+            messages.forEach(m => {
+                const uId = m.sender_role === 'user' ? m.sender_id : m.recipient_id;
+                if (!chatChannels[uId]) {
+                    chatChannels[uId] = {
+                        userName: m.userName || 'User',
+                        messages: []
+                    };
+                }
+                chatChannels[uId].messages.push(m);
+            });
+            
+            renderChatChannelsList();
+            if (activeChatUserId && chatChannels[activeChatUserId]) {
+                renderActiveChat();
+            }
         }
     } catch (err) {
-        console.error(err);
+        console.error("Failed to load chat messages:", err);
     }
 }
+
+
+function renderChatChannelsList() {
+    const listContainer = document.getElementById('supportChatUsersList');
+    if (!listContainer) return;
+    
+    const userIds = Object.keys(chatChannels);
+    if (userIds.length === 0) {
+        listContainer.innerHTML = '<div style="color: rgba(255,255,255,0.4); text-align: center; padding: 24px;">No active support chats</div>';
+        return;
+    }
+    
+    listContainer.innerHTML = userIds.map(uId => {
+        const chan = chatChannels[uId];
+        const lastMsg = chan.messages[chan.messages.length - 1];
+        const lastText = lastMsg ? lastMsg.text : '';
+        const isSelected = uId === activeChatUserId;
+        return `
+            <div onclick="selectChatChannel('${uId}')" style="padding: 12px; margin-bottom: 8px; border-radius: 8px; cursor: pointer; transition: all 0.2s; background: ${isSelected ? 'rgba(255, 92, 147, 0.12)' : 'rgba(255,255,255,0.02)'}; border: 1px solid ${isSelected ? '#FF5C93' : 'rgba(255,255,255,0.05)'};">
+                <div style="font-weight: bold; color: ${isSelected ? '#FF5C93' : 'white'}; font-size: 14px;">${chan.userName}</div>
+                <div style="color: rgba(255,255,255,0.5); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px;">${lastText}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function selectChatChannel(uId) {
+    activeChatUserId = uId;
+    renderChatChannelsList();
+    renderActiveChat();
+    
+    const inputArea = document.getElementById('chatInputArea');
+    if (inputArea) inputArea.style.display = 'flex';
+}
+
+async function viewUserDetails(userId) {
+    try {
+        await loadUsersData();
+        const user = loadedUsers.find(u => u.user_id === userId);
+        if (user) {
+            switchTab('users');
+            openUserDrawer(user);
+        } else {
+            alert("User details not found.");
+        }
+    } catch (err) {
+        console.error("Error viewing user profile:", err);
+    }
+}
+
+function renderActiveChat() {
+    const header = document.getElementById('chatActiveUserHeader');
+    const container = document.getElementById('chatMessagesContainer');
+    if (!header || !container || !activeChatUserId || !chatChannels[activeChatUserId]) return;
+    
+    const chan = chatChannels[activeChatUserId];
+    header.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span>Chat with <strong>${chan.userName}</strong></span>
+            <button onclick="viewUserDetails('${activeChatUserId}')" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 6px; color: #FF5C93; cursor: pointer; font-size: 12px; font-weight: bold; transition: all 0.2s;">View Profile</button>
+        </div>
+    `;
+
+    
+    container.innerHTML = chan.messages.map(m => {
+        const isAdmin = m.sender_role === 'admin';
+        const bg = isAdmin ? 'linear-gradient(135deg, #FF5C93, #8B5CF6)' : 'rgba(255,255,255,0.06)';
+        const align = isAdmin ? 'flex-end' : 'flex-start';
+        const border = isAdmin ? 'none' : '1px solid rgba(255,255,255,0.05)';
+        return `
+            <div style="align-self: ${align}; max-width: 70%; padding: 10px 14px; border-radius: 12px; background: ${bg}; border: ${border}; color: white;">
+                <div style="font-size: 13.5px; line-height: 1.4;">${m.text}</div>
+                <div style="font-size: 10px; color: rgba(255,255,255,0.5); margin-top: 4px; text-align: right;">${new Date(m.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+            </div>
+        `;
+    }).join('');
+    
+    setTimeout(() => {
+        container.scrollTop = container.scrollHeight;
+    }, 50);
+}
+
+
+function sendAdminChatMessage() {
+    const input = document.getElementById('chatAdminInput');
+    if (!input || !activeChatUserId) return;
+    const text = input.value.trim();
+    if (!text) return;
+    
+    input.value = '';
+    
+    if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+        wsConn.send(JSON.stringify({
+            type: 'chat_message',
+            data: {
+                senderId: '00000000-0000-0000-0000-000000000000',
+                senderRole: 'admin',
+                recipientId: activeChatUserId,
+                text: text
+            }
+        }));
+    }
+}
+
 
 function loadReportsData() {
     console.log("Reports tab loaded");
@@ -2761,4 +3004,94 @@ function loadReportsData() {
 
 function loadExportsData() {
     console.log("Exports tab loaded");
+}
+
+let wsConn = null;
+function initRealTimeSync() {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+    
+    wsConn = new WebSocket(wsUrl);
+    
+    wsConn.onopen = () => {
+        console.log('Real-time sync WebSocket connected.');
+        // Start ping interval to keep connection alive
+        setInterval(() => {
+            if (wsConn.readyState === WebSocket.OPEN) {
+                wsConn.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+    };
+    
+    wsConn.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            console.log('Real-time sync event received:', msg);
+            
+            // Handle real-time chat messages
+            if (msg.type === 'chat_message') {
+                const m = msg.data;
+                const uId = m.sender_role === 'user' ? m.sender_id : m.recipient_id;
+                if (!chatChannels[uId]) {
+                    chatChannels[uId] = {
+                        userName: m.userName || 'User',
+                        messages: []
+                    };
+                }
+                // Check if message is already in list
+                if (!chatChannels[uId].messages.some(existing => existing.message_id === m.message_id)) {
+                    chatChannels[uId].messages.push(m);
+                }
+                
+                renderChatChannelsList();
+                if (activeChatUserId === uId) {
+                    renderActiveChat();
+                }
+            }
+            
+            // Refresh dashboard data on any real-time update
+            if (activeTab === 'dashboard') {
+                loadDashboardData();
+            }
+            
+            // Map message updates to tab reload functions
+            if (msg.type) {
+                if (activeTab === 'bookings' && msg.type === 'bookings') {
+                    loadBookingsData();
+                } else if (activeTab === 'users' && msg.type === 'users') {
+                    loadUsersData();
+                } else if (activeTab === 'partners' && msg.type === 'partners') {
+                    loadPartnersData();
+                } else if (activeTab === 'kyc' && msg.type === 'kyc') {
+                    loadKycData();
+                } else if (activeTab === 'venues' && msg.type === 'venues') {
+                    loadVenuesData();
+                } else if (activeTab === 'settings' && msg.type === 'settings') {
+                    loadSettingsData();
+                } else if (activeTab === 'disputes' && msg.type === 'disputes') {
+                    loadDisputesData();
+                } else if (activeTab === 'tournaments' && msg.type === 'tournaments') {
+                    loadTournamentsData();
+                } else if (activeTab === 'finance' && (msg.type === 'bookings' || msg.type === 'transactions')) {
+                    loadFinanceData();
+                } else if (activeTab === 'demand' && msg.type === 'slots') {
+                    // Surge pricing uses slots
+                    if (typeof loadDemandSlots === 'function') loadDemandSlots();
+                }
+            }
+        } catch (err) {
+            console.error('Failed to handle sync message:', err);
+        }
+    };
+
+    
+    wsConn.onclose = () => {
+        console.log('WebSocket sync connection closed. Reconnecting in 5s...');
+        setTimeout(initRealTimeSync, 5000);
+    };
+    
+    wsConn.onerror = (err) => {
+        console.error('WebSocket sync error:', err);
+        wsConn.close();
+    };
 }

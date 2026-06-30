@@ -31,6 +31,7 @@ model User {
 model Partner {
   partner_id        String            @id @default(uuid()) @db.Uuid
   phone_number      String            @unique
+  email             String?           @unique
   kyc_status        String            @default("unverified") // unverified | pending | verified | rejected
   plan_tier         String            @default("free")
   total_earnings    Decimal           @default(0.0) @db.Decimal(10, 2)
@@ -54,6 +55,12 @@ model Venue {
   base_price        Decimal        @db.Decimal(10, 2)
   slot_mode         String         @default("60m")
   created_at        DateTime       @default(now()) @db.Timestamptz
+  amenities         String[]       @default([])
+  images            String[]       @default([])
+  address           String?
+  contact_phone     String?
+  latitude          Decimal?       @db.Decimal(10, 8)
+  longitude         Decimal?       @db.Decimal(11, 8)
 
   partner           Partner        @relation(fields: [partner_id], references: [partner_id], onDelete: Cascade)
   slots             Slot[]
@@ -320,3 +327,15 @@ model UserMilestone {
 
   @@map("user_milestones")
 }
+
+model ChatMessage {
+  message_id   String   @id @default(uuid()) @db.Uuid
+  sender_id    String   @db.Uuid
+  sender_role  String   // user | partner | admin
+  recipient_id String   @db.Uuid
+  text         String
+  created_at   DateTime @default(now()) @db.Timestamptz
+
+  @@map("chat_messages")
+}
+

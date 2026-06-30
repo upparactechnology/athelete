@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
 import { httpLogStream } from './config/logger.js';
 import { adminRoutes } from './modules/admin/admin.routes.js';
+import { clientRoutes } from './modules/client/client.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,6 +36,8 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
 // Mount administrative REST APIs
 app.use('/api/admin', adminRoutes);
+// Mount client REST APIs
+app.use('/api', clientRoutes);
 // Catch all unregistered API routes
 app.use((req, res) => {
     res.status(404).json({

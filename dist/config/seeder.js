@@ -1,5 +1,10 @@
 import { prisma } from './prisma.js';
 export async function seedDatabase() {
+    const userCount = await prisma.user.count();
+    if (userCount > 0) {
+        console.log("Database already contains data. Skipping seeding to prevent data loss.");
+        return;
+    }
     console.log("Cleaning existing database tables before seeding...");
     // Clean up order (dependent children tables first)
     await prisma.userMilestone.deleteMany();
@@ -103,7 +108,14 @@ export async function seedDatabase() {
             sport_types: ["Football", "Futsal"],
             status: "listed",
             base_price: 1500.00,
-            avg_rating: 4.5
+            avg_rating: 4.5,
+            amenities: ["Wi-Fi", "Parking", "Showers", "Lockers", "Flood Lights"],
+            images: [
+                "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=800",
+                "https://images.unsplash.com/photo-1529900748604-07564a03e7a6?w=800"
+            ],
+            address: "123 Sports Drive, Sector 62, Noida, UP 201301",
+            contact_phone: "+91 98765 43210"
         }
     });
     const venue2 = await prisma.venue.create({
@@ -113,7 +125,13 @@ export async function seedDatabase() {
             sport_types: ["Badminton"],
             status: "listed",
             base_price: 400.00,
-            avg_rating: 4.8
+            avg_rating: 4.8,
+            amenities: ["Parking", "Lockers", "Drinks"],
+            images: [
+                "https://images.unsplash.com/photo-1518063319789-7217e6706b04?w=800"
+            ],
+            address: "456 Shuttle Court, Indiranagar, Bengaluru, KA 560038",
+            contact_phone: "+91 80976 54321"
         }
     });
     const venue3 = await prisma.venue.create({
@@ -123,7 +141,13 @@ export async function seedDatabase() {
             sport_types: ["Tennis"],
             status: "unlisted",
             base_price: 800.00,
-            avg_rating: 0.0
+            avg_rating: 0.0,
+            amenities: ["Wi-Fi", "Parking", "Showers"],
+            images: [
+                "https://images.unsplash.com/photo-1536122985607-4fe00b283652?w=800"
+            ],
+            address: "789 Baseline Court, Bandra West, Mumbai, MH 400050",
+            contact_phone: "+91 70123 45678"
         }
     });
     // 4. Create Slots

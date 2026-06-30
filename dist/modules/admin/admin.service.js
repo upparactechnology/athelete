@@ -4,6 +4,7 @@ import { prisma } from '../../config/prisma.js';
 import { redis, RedisKeys } from '../../config/redis.js';
 import { env } from '../../config/env.js';
 import { ValidationError, NotFoundError, ConflictError } from '../../shared/utils/errors.js';
+import { WebSocketService } from '../../shared/services/websocket.js';
 export class AdminService {
     // 1. Admin Authentication
     static async login(email, password) {
@@ -252,7 +253,7 @@ export class AdminService {
             data: { status: "CANCELLED" }
         });
         // Make slot available
-        await prisma.slot.update({
+        const updatedSlot = await prisma.slot.update({
             where: { slot_id: booking.slot_id },
             data: { status: "available" }
         });
@@ -267,6 +268,8 @@ export class AdminService {
                 amount: booking.online_amount
             }
         });
+        WebSocketService.broadcast('bookings', updated);
+        WebSocketService.broadcast('slots', [updatedSlot]);
         return updated;
     }
     static async reassignBookingSlot(bookingId, newSlotId) {
@@ -290,15 +293,17 @@ export class AdminService {
             data: { slot_id: newSlotId }
         });
         // Free old slot
-        await prisma.slot.update({
+        const oldSlot = await prisma.slot.update({
             where: { slot_id: booking.slot_id },
             data: { status: "available" }
         });
         // Mark new slot booked
-        await prisma.slot.update({
+        const freshSlot = await prisma.slot.update({
             where: { slot_id: newSlotId },
             data: { status: "booked" }
         });
+        WebSocketService.broadcast('bookings', updated);
+        WebSocketService.broadcast('slots', [oldSlot, freshSlot]);
         return updated;
     }
     // 9. Finance & Transactions
@@ -480,6 +485,7 @@ export class AdminService {
             });
             updatedSlots.push(updated);
         }
+        WebSocketService.broadcast('slots', updatedSlots);
         return updatedSlots;
     }
     static async removeDemandTag(slotIds) {
@@ -499,6 +505,7 @@ export class AdminService {
             });
             updatedSlots.push(updated);
         }
+        WebSocketService.broadcast('slots', updatedSlots);
         return updatedSlots;
     }
     // ==========================================
@@ -579,13 +586,19 @@ export class AdminService {
         });
     }
     static async createTournament(data) {
-        return prisma.tournament.create({ data });
+        const tournament = await prisma.tournament.create({ data });
+        WebSocketService.broadcast('tournaments', tournament);
+        return tournament;
     }
     static async updateTournament(tournamentId, data) {
-        return prisma.tournament.update({ where: { tournament_id: tournamentId }, data });
+        const tournament = await prisma.tournament.update({ where: { tournament_id: tournamentId }, data });
+        WebSocketService.broadcast('tournaments', tournament);
+        return tournament;
     }
     static async deleteTournament(tournamentId) {
-        return prisma.tournament.delete({ where: { tournament_id: tournamentId } });
+        const tournament = await prisma.tournament.delete({ where: { tournament_id: tournamentId } });
+        WebSocketService.broadcast('tournaments', { tournament_id: tournamentId, deleted: true });
+        return tournament;
     }
     // Reviews CRUD
     static async getReviews() {
@@ -683,21 +696,29 @@ export class AdminService {
         };
         await redis.lPush('audit_logs', JSON.stringify(log));
     }
-    // Settings CRUD
     static async getSettings() {
         const data = await redis.get('system_settings');
+        const defaults = {
+            platformName: "Athlete's POV",
+            supportEmail: "support@athletepov.com",
+            minWithdrawal: 1000,
+            convenienceFee: 60,
+            smtpHost: "",
+            smtpPort: 587,
+            smtpUser: "",
+            smtpPass: "",
+            smtpSecure: false,
+            smtpFrom: "",
+            useSmtpForOtp: false
+        };
         if (!data) {
-            return {
-                platformName: "Athlete's POV",
-                supportEmail: "support@athletepov.com",
-                minWithdrawal: 1000,
-                convenienceFee: 60
-            };
+            return defaults;
         }
-        return JSON.parse(data);
+        return { ...defaults, ...JSON.parse(data) };
     }
     static async saveSettings(settings) {
         await redis.set('system_settings', JSON.stringify(settings));
+        WebSocketService.broadcast('settings', settings);
         return settings;
     }
     // Roles CRUD
@@ -749,6 +770,27 @@ export class AdminService {
                 { date: 'asc' },
                 { start_time: 'asc' }
             ]
+        });
+    }
+    static async getAllChatMessages() {
+        // Fetch all support chat messages and join user info if possible
+        const messages = await prisma.chatMessage.findMany({
+            orderBy: { created_at: 'asc' }
+        });
+        // Get unique user IDs to fetch user names
+        const userIds = [...new Set(messages.map(m => m.sender_role === 'user' ? m.sender_id : m.recipient_id))];
+        const users = await prisma.user.findMany({
+            where: { user_id: { in: userIds } },
+            select: { user_id: true, name: true, phone_number: true }
+        });
+        const userMap = new Map(users.map(u => [u.user_id, u]));
+        return messages.map(m => {
+            const uId = m.sender_role === 'user' ? m.sender_id : m.recipient_id;
+            const user = userMap.get(uId);
+            return {
+                ...m,
+                userName: user?.name || user?.phone_number || 'Unknown User'
+            };
         });
     }
 }

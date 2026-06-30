@@ -4,7 +4,9 @@ import { env } from '../config/env.js';
 import { UnauthorizedError } from '../shared/utils/errors.js';
 import { AuthRequest, JwtAccessPayload } from '../shared/types/index.js';
 
-export function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
+import { prisma } from '../config/prisma.js';
+
+export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return next(new UnauthorizedError("No authentication token provided"));
@@ -17,6 +19,19 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
 
   try {
     const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as JwtAccessPayload;
+
+    if (payload.role === 'user') {
+      const user = await prisma.user.findUnique({ where: { user_id: payload.sub } });
+      if (!user) {
+        return next(new UnauthorizedError("User profile no longer exists. Please log in again."));
+      }
+    } else if (payload.role === 'partner') {
+      const partner = await prisma.partner.findUnique({ where: { partner_id: payload.sub } });
+      if (!partner) {
+        return next(new UnauthorizedError("Partner profile no longer exists. Please log in again."));
+      }
+    }
+
     req.user = {
       id: payload.sub,
       role: payload.role,

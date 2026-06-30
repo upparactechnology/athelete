@@ -4,10 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   // Use 10.0.2.2 for Android Emulator to connect to localhost, fallback to localhost for desktop/web
-  static const String baseUrl = 'http://10.0.2.2:4000/api';
+  static const String baseUrl = 'http://192.168.29.240:4000/api';
   static const String fallbackUrl = 'http://localhost:4000/api';
 
   static String _activeUrl = baseUrl;
+
+  static String get activeUrl => _activeUrl;
 
   static Future<void> checkServerUrl() async {
     try {
@@ -77,11 +79,15 @@ class ApiService {
     return jsonDecode(res.body);
   }
 
-  static Future<Map<String, dynamic>> updateProfile(String name, String email) async {
+  static Future<Map<String, dynamic>> updateProfile(String name, String email, {String? phoneNumber}) async {
     final res = await http.patch(
       Uri.parse('$_activeUrl/users/me'),
       headers: await _headers(),
-      body: jsonEncode({'name': name, 'email': email}),
+      body: jsonEncode({
+        'name': name,
+        'email': email,
+        if (phoneNumber != null) 'phone_number': phoneNumber,
+      }),
     );
     return jsonDecode(res.body);
   }
@@ -98,10 +104,18 @@ class ApiService {
   }
 
   // 4. Venues & Slots
-  static Future<Map<String, dynamic>> getVenues({String? sport}) async {
+  static Future<Map<String, dynamic>> getVenues({String? sport, double? lat, double? lng}) async {
     String url = '$_activeUrl/venues';
+    final queryParams = <String>[];
     if (sport != null && sport.isNotEmpty) {
-      url += '?sport=$sport';
+      queryParams.add('sport=$sport');
+    }
+    if (lat != null && lng != null) {
+      queryParams.add('lat=$lat');
+      queryParams.add('lng=$lng');
+    }
+    if (queryParams.isNotEmpty) {
+      url += '?${queryParams.join('&')}';
     }
     final res = await http.get(Uri.parse(url), headers: await _headers());
     return jsonDecode(res.body);
@@ -109,6 +123,18 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getVenueDetails(String id) async {
     final res = await http.get(Uri.parse('$_activeUrl/venues/$id'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> createReview(String venueId, double rating, String comment) async {
+    final res = await http.post(
+      Uri.parse('$_activeUrl/venues/$venueId/reviews'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'rating': rating.toInt(),
+        'comment': comment,
+      }),
+    );
     return jsonDecode(res.body);
   }
 
@@ -191,4 +217,16 @@ class ApiService {
     final res = await http.get(Uri.parse('$_activeUrl/content/banners?target=user'), headers: await _headers());
     return jsonDecode(res.body);
   }
+
+  // 10. Notifications
+  static Future<Map<String, dynamic>> getNotifications() async {
+    final res = await http.get(Uri.parse('$_activeUrl/notifications'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> readNotification(String id) async {
+    final res = await http.patch(Uri.parse('$_activeUrl/notifications/$id/read'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
 }
+

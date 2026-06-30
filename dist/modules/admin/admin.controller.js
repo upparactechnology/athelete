@@ -749,5 +749,14 @@ export class AdminController {
             next(err);
         }
     }
+    static async getAllChatMessages(req, res, next) {
+        try {
+            const messages = await AdminService.getAllChatMessages();
+            return sendSuccess(res, messages);
+        }
+        catch (err) {
+            next(err);
+        }
+    }
 }
 export default AdminController;

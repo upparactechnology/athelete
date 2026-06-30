@@ -18,7 +18,7 @@ services:
     image: redis:7
     container_name: athletes-redis
     ports:
-      - "6379:6379"
+      - "7379:6379"
     restart: unless-stopped
 
 volumes:
