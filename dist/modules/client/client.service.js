@@ -783,4 +783,19 @@ export class ClientService {
             }
         });
     }
+    static async sendChatMessage(userId, recipientId, text) {
+        const msg = await prisma.chatMessage.create({
+            data: {
+                sender_id: userId,
+                sender_role: 'user',
+                recipient_id: recipientId,
+                text: text
+            }
+        });
+        try {
+            WebSocketService.broadcast('chat', msg);
+        }
+        catch (_) { }
+        return msg;
+    }
 }

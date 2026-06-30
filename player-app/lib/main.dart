@@ -11,6 +11,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
 
 class AppColors {
   static const Color pink = Color(0xFFFF5C93);
@@ -22,6 +24,61 @@ class AppColors {
     colors: [pink, purple],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
+  );
+}
+
+List<String> _parseVenueImages(dynamic imagesData) {
+  final List<dynamic> images = imagesData is List ? imagesData : [];
+  if (images.isEmpty) {
+    return [
+      "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=800",
+      "https://images.unsplash.com/photo-1517649763962-0c623066013b?q=80&w=800"
+    ];
+  }
+  return images.map((i) {
+    final path = i.toString();
+    if (path.startsWith('data:image') || path.length > 100) return path;
+    if (path.startsWith('http')) return path;
+    final cleanPath = path.startsWith('/') ? path : '/$path';
+    final baseUrl = ApiService.activeUrl.replaceAll('/api', '');
+    return '$baseUrl$cleanPath';
+  }).toList();
+}
+
+Widget _buildVenueImage(String imageStr, {required double height, double? width, required BoxFit fit}) {
+  if (imageStr.startsWith('data:image') || (!imageStr.startsWith('http') && !imageStr.startsWith('/') && imageStr.length > 100)) {
+    try {
+      String base64Body = imageStr;
+      if (imageStr.contains(',')) {
+        base64Body = imageStr.split(',').last;
+      }
+      final bytes = base64Decode(base64Body);
+      return Image.memory(
+        bytes,
+        height: height,
+        width: width,
+        fit: fit,
+        errorBuilder: (context, error, stackTrace) => Image.network(
+          "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=800",
+          height: height,
+          width: width,
+          fit: fit,
+        ),
+      );
+    } catch (_) {}
+  }
+  
+  return Image.network(
+    imageStr,
+    height: height,
+    width: width,
+    fit: fit,
+    errorBuilder: (context, error, stackTrace) => Image.network(
+      "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=800",
+      height: height,
+      width: width,
+      fit: fit,
+    ),
   );
 }
 
@@ -690,6 +747,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             right: 0,
             bottom: 0,
             child: GlassContainer(
+              useBlur: true,
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(28),
                 topRight: Radius.circular(28),
@@ -1205,7 +1263,7 @@ class _HomeTabState extends State<HomeTab> {
         padding: const EdgeInsets.all(0),
         child: InkWell(
           onTap: () {
-            Navigator.of(context).push(
+            Navigator.of(context, rootNavigator: true).push(
               MaterialPageRoute(
                 builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
               ),
@@ -1218,13 +1276,21 @@ class _HomeTabState extends State<HomeTab> {
               // Hero Image Header
               Stack(
                 children: [
-                  Container(
-                    height: 180,
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                  ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    child: Container(
+                      height: 180,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
+                      ),
+                      child: _buildVenueImage(
+                        _parseVenueImages(venue['images']).first,
+                        height: 180,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
                     ),
-                    child: const Center(child: Icon(Icons.sports_soccer_rounded, size: 64, color: AppColors.pink)),
                   ),
                   // Trending Badge
                   Positioned(
@@ -1382,7 +1448,7 @@ class _HomeTabState extends State<HomeTab> {
                           ),
                           child: ElevatedButton(
                             onPressed: () {
-                              Navigator.of(context).push(
+                              Navigator.of(context, rootNavigator: true).push(
                                 MaterialPageRoute(
                                   builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
                                 ),
@@ -1463,6 +1529,55 @@ class _HomeTabState extends State<HomeTab> {
   }
 }
 
+class GlassSkeleton extends StatefulWidget {
+  final double width;
+  final double height;
+  final double borderRadius;
+  const GlassSkeleton({super.key, required this.width, required this.height, this.borderRadius = 16});
+
+  @override
+  State<GlassSkeleton> createState() => _GlassSkeletonState();
+}
+
+class _GlassSkeletonState extends State<GlassSkeleton> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Opacity(
+          opacity: lerpDouble(0.12, 0.35, _controller.value) ?? 0.2,
+          child: Container(
+            width: widget.width,
+            height: widget.height,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(widget.borderRadius),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class VenueDetailScreen extends StatefulWidget {
   final String venueId;
   const VenueDetailScreen({super.key, required this.venueId});
@@ -1476,23 +1591,64 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
   List<dynamic> _slots = [];
   List<dynamic> _similarVenues = [];
   bool _isLoading = true;
-  String _selectedDate = "2026-06-20";
+  String _selectedDate = "";
   dynamic _selectedSlot;
   bool _isFavorite = false;
   bool _isAboutExpanded = false;
   final PageController _imagePageController = PageController();
   int _currentImageIndex = 0;
+  String _supportPhone = "9427961426";
 
   @override
   void initState() {
     super.initState();
+    final dates = _generateDates();
+    _selectedDate = dates.first;
     _loadVenueDetails();
+    _loadSupportPhone();
+  }
+
+  List<String> _generateDates() {
+    final List<String> dates = [];
+    final today = DateTime.now();
+    for (int i = 0; i < 8; i++) {
+      final date = today.add(Duration(days: i));
+      final yr = date.year;
+      final mo = date.month.toString().padLeft(2, '0');
+      final dy = date.day.toString().padLeft(2, '0');
+      dates.add("$yr-$mo-$dy");
+    }
+    return dates;
+  }
+
+  void _loadSupportPhone() async {
+    try {
+      final res = await ApiService.getSystemSettings();
+      if (res['success'] == true && res['data']?['supportPhone'] != null) {
+        setState(() {
+          _supportPhone = res['data']['supportPhone'];
+        });
+      }
+    } catch (_) {}
   }
 
   void _loadVenueDetails() async {
     setState(() => _isLoading = true);
     final detailResponse = await ApiService.getVenueDetails(widget.venueId);
     final slotsResponse = await ApiService.getSlots(widget.venueId, _selectedDate);
+    
+    // Check favorite status
+    final token = await ApiService.getToken();
+    if (token != null) {
+      try {
+        final wishRes = await ApiService.getWishlist();
+        if (wishRes['success'] == true) {
+          final wishlists = wishRes['data'] as List<dynamic>? ?? [];
+          _isFavorite = wishlists.any((w) => w['venue_id'] == widget.venueId);
+        }
+      } catch (_) {}
+    }
+
     try {
       final simRes = await ApiService.getVenues();
       if (simRes['success'] == true) {
@@ -1510,6 +1666,27 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
     }
   }
 
+  void _checkAuthAndExecute(VoidCallback onSuccess) async {
+    final token = await ApiService.getToken();
+    if (token == null) {
+      _showLoginSheet(context, onSuccess);
+    } else {
+      onSuccess();
+    }
+  }
+
+  void _toggleFavorite() async {
+    _checkAuthAndExecute(() async {
+      final res = await ApiService.toggleWishlist(widget.venueId);
+      if (res['success'] == true) {
+        setState(() {
+          _isFavorite = !_isFavorite;
+        });
+        AppToast.show(context, _isFavorite ? "Saved to favorites!" : "Removed from favorites!");
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1518,19 +1695,21 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
     final subtextCol = const Color(0xFF9AA4B2);
     final borderCol = Colors.white.withOpacity(0.08);
 
-    final List<String> mockImages = [
-      "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=800&auto=format&fit=crop",
-      "https://images.unsplash.com/photo-1459865264687-595d652de67e?w=800&auto=format&fit=crop",
-      "https://images.unsplash.com/photo-1518063319789-7217e6706b04?w=800&auto=format&fit=crop",
-    ];
+    final List<String> displayImages = _parseVenueImages(_venue['images']);
 
-    final String aboutText = _venue['description'] ??
-        "Premium FIFA-size football turf with LED floodlights, changing rooms, drinking water, parking, and professional maintenance. Ideal for 5-v-5 and 7-v-7 matches.";
+    final String aboutText = _venue['description'] ?? "No description provided by host.";
+    final List<dynamic> amenities = _venue['amenities'] ?? [];
+    final List<dynamic> rules = _venue['rules'] ?? [];
+    final List<dynamic> reviews = _venue['reviews'] ?? [];
+
+    // Slots status check
+    bool isClosed = _venue['status'] == 'suspended';
+    bool allSlotsBooked = _slots.isNotEmpty && _slots.every((s) => s['status'] == 'booked');
 
     return Scaffold(
       backgroundColor: const Color(0xFF090B10),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
+          ? _buildShimmerLoading()
           : Stack(
               children: [
                 // Immersive Scroll View
@@ -1551,40 +1730,29 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                   _currentImageIndex = index;
                                 });
                               },
-                              itemCount: mockImages.length,
+                              itemCount: displayImages.length,
                               itemBuilder: (context, idx) {
-                                return Image.network(
-                                  mockImages[idx],
-                                  fit: BoxFit.cover,
-                                  loadingBuilder: (context, child, loadingProgress) {
-                                    if (loadingProgress == null) return child;
-                                    return Container(
-                                      color: Colors.grey.shade900,
-                                      child: const Center(child: CircularProgressIndicator(color: AppColors.pink)),
-                                    );
-                                  },
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return Container(
-                                      color: Colors.grey.shade900,
-                                      child: const Center(child: Icon(Icons.sports_soccer_rounded, size: 64, color: Colors.white30)),
-                                    );
-                                  },
-                                );
+                                return _buildVenueImage(
+                                    displayImages[idx],
+                                    height: 310,
+                                    fit: BoxFit.cover,
+                                  );
                               },
                             ),
                           ),
-                          // Dark gradient overlay
                           Positioned.fill(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.black.withOpacity(0.5),
-                                    Colors.transparent,
-                                    const Color(0xFF090B10),
-                                  ],
+                            child: IgnorePointer(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.black.withOpacity(0.5),
+                                      Colors.transparent,
+                                      const Color(0xFF090B10),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -1622,7 +1790,17 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                       backgroundColor: Colors.transparent,
                                       child: IconButton(
                                         icon: const Icon(Icons.share_rounded, color: Colors.white, size: 18),
-                                        onPressed: () => AppToast.show(context, "Link copied to clipboard!"),
+                                        onPressed: () {
+                                          final name = _venue['name'] ?? 'Sports Turf';
+                                          final address = _venue['address'] ?? 'Ahmedabad, Gujarat';
+                                          final box = context.findRenderObject() as RenderBox?;
+                                          Share.share(
+                                            "Check out $name located at $address! Book your slot now on Athlete's POV:\nhttps://athletepov.com/venue/${widget.venueId}",
+                                            sharePositionOrigin: box != null
+                                                ? box.localToGlobal(Offset.zero) & box.size
+                                                : null,
+                                          );
+                                        },
                                       ),
                                     ),
                                   ),
@@ -1641,10 +1819,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                           color: _isFavorite ? AppColors.pink : Colors.white,
                                           size: 18,
                                         ),
-                                        onPressed: () {
-                                          setState(() => _isFavorite = !_isFavorite);
-                                          AppToast.show(context, _isFavorite ? "Saved to favorites!" : "Removed from favorites!");
-                                        },
+                                        onPressed: _toggleFavorite,
                                       ),
                                     ),
                                   ),
@@ -1660,7 +1835,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                               radius: 12,
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                               child: Text(
-                                "${_currentImageIndex + 1}/${mockImages.length}",
+                                "${_currentImageIndex + 1}/${displayImages.length}",
                                 style: GoogleFonts.sora(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
                               ),
                             ),
@@ -1680,7 +1855,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    _venue['name'] ?? 'Elite Turf Arena',
+                                    _venue['name'] ?? 'Sports Turf',
                                     style: GoogleFonts.sora(fontSize: 26, fontWeight: FontWeight.bold, color: textCol),
                                   ),
                                 ),
@@ -1708,12 +1883,12 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                 const Icon(Icons.star_rounded, color: Colors.amber, size: 18),
                                 const SizedBox(width: 4),
                                 Text(
-                                  _venue['avg_rating']?.toString() ?? '4.5',
+                                  double.tryParse(_venue['avg_rating']?.toString() ?? '0.0')?.toStringAsFixed(1) ?? '0.0',
                                   style: GoogleFonts.sora(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                                 ),
                                 const SizedBox(width: 6),
                                 Text(
-                                  "•  ${_venue['reviews']?.length ?? 128} Reviews",
+                                  "•  ${reviews.length} Reviews",
                                   style: GoogleFonts.sora(color: subtextCol, fontSize: 13),
                                 ),
                                 const SizedBox(width: 12),
@@ -1748,9 +1923,12 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                               children: [
                                 Row(
                                   children: [
-                                    const CircleAvatar(radius: 4, backgroundColor: Color(0xFF3DDC84)),
+                                    CircleAvatar(radius: 4, backgroundColor: isClosed ? Colors.red : const Color(0xFF3DDC84)),
                                     const SizedBox(width: 8),
-                                    Text("Open until 11:00 PM", style: GoogleFonts.sora(color: const Color(0xFF3DDC84), fontSize: 13, fontWeight: FontWeight.bold)),
+                                    Text(
+                                      isClosed ? "Suspended / Closed" : "Open until 11:00 PM",
+                                      style: GoogleFonts.sora(color: isClosed ? Colors.redAccent : const Color(0xFF3DDC84), fontSize: 13, fontWeight: FontWeight.bold),
+                                    ),
                                   ],
                                 ),
                                 Row(
@@ -1776,25 +1954,35 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                         child: Row(
                           children: [
                             _buildQuickAction(Icons.phone_rounded, "Call", Colors.green, () {
-                              AppToast.show(context, "Dialing host: ${_venue['contact_phone'] ?? '9427961426'}");
+                              if (_supportPhone.isEmpty) {
+                                AppToast.show(context, "Support number unavailable", isError: true);
+                              } else {
+                                launchUrl(Uri.parse("tel:$_supportPhone"));
+                              }
                             }),
                             const SizedBox(width: 8),
-                            _buildQuickAction(Icons.chat_bubble_rounded, "WhatsApp", const Color(0xFF3DDC84), () {
-                              AppToast.show(context, "Opening WhatsApp chat...");
+                            _buildQuickAction(Icons.chat_bubble_rounded, "Chat", const Color(0xFF3DDC84), () {
+                              _checkAuthAndExecute(() {
+                                showModalBottomSheet(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  backgroundColor: Colors.transparent,
+                                  builder: (context) => _SupportChatSheet(partnerId: _venue['partner_id']),
+                                );
+                              });
                             }),
                             const SizedBox(width: 8),
                             _buildQuickAction(Icons.directions_rounded, "Directions", Colors.blue, () {
-                              AppToast.show(context, "Calculating route to turf...");
+                              final address = _venue['address'] ?? 'Madhupura, Ahmedabad, Gujarat';
+                              final url = Uri.parse("https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(address)}");
+                              launchUrl(url, mode: LaunchMode.externalApplication);
                             }),
                             const SizedBox(width: 8),
                             _buildQuickAction(
                               _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                              "Save Venue",
+                              "Save",
                               AppColors.pink,
-                              () {
-                                setState(() => _isFavorite = !_isFavorite);
-                                AppToast.show(context, _isFavorite ? "Added to saved list!" : "Removed from saved list!");
-                              },
+                              _toggleFavorite,
                             ),
                           ],
                         ),
@@ -1806,6 +1994,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: GlassContainer(
                           radius: 24,
+                          useBlur: false,
                           padding: const EdgeInsets.all(20),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1822,42 +2011,16 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                       maxLines: _isAboutExpanded ? null : 3,
                                       overflow: _isAboutExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
                                     ),
-                                    const SizedBox(height: 8),
-                                    GestureDetector(
-                                      onTap: () => setState(() => _isAboutExpanded = !_isAboutExpanded),
-                                      child: Text(
-                                        _isAboutExpanded ? "Read Less" : "Read More",
-                                        style: GoogleFonts.sora(fontSize: 11, color: AppColors.pink, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              // Map preview
-                              Container(
-                                width: 90,
-                                height: 90,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.04),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: borderCol),
-                                ),
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(16),
-                                      child: Opacity(
-                                        opacity: 0.6,
-                                        child: Image.network(
-                                          "https://maps.googleapis.com/maps/api/staticmap?center=23.03,72.58&zoom=14&size=100x100&key=MOCK",
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (context, error, stackTrace) => const Icon(Icons.map_rounded, color: Colors.grey, size: 28),
+                                    if (aboutText.length > 100) ...[
+                                      const SizedBox(height: 8),
+                                      GestureDetector(
+                                        onTap: () => setState(() => _isAboutExpanded = !_isAboutExpanded),
+                                        child: Text(
+                                          _isAboutExpanded ? "Read Less" : "Read More",
+                                          style: GoogleFonts.sora(fontSize: 11, color: AppColors.pink, fontWeight: FontWeight.bold),
                                         ),
                                       ),
-                                    ),
-                                    const Icon(Icons.location_on_rounded, color: AppColors.pink, size: 32),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -1867,57 +2030,55 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                       ),
                       const SizedBox(height: 24),
 
-                      // 5. Amenities Section
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: GlassContainer(
-                          radius: 24,
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text("Amenities", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
-                                  GestureDetector(
-                                    onTap: () => AppToast.show(context, "All amenities unlocked!"),
-                                    child: Text("View All", style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold)),
-                                  )
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              GridView.count(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                crossAxisCount: 5,
-                                crossAxisSpacing: 8,
-                                mainAxisSpacing: 12,
-                                childAspectRatio: 0.8,
-                                children: [
-                                  _buildAmenityTile(Icons.lightbulb_outline_rounded, "Lights"),
-                                  _buildAmenityTile(Icons.local_parking_rounded, "Parking"),
-                                  _buildAmenityTile(Icons.shower_outlined, "Changing"),
-                                  _buildAmenityTile(Icons.local_cafe_rounded, "Cafe"),
-                                  _buildAmenityTile(Icons.wifi_rounded, "Wi-Fi"),
-                                  _buildAmenityTile(Icons.lock_rounded, "Lockers"),
-                                  _buildAmenityTile(Icons.medical_services_outlined, "First Aid"),
-                                  _buildAmenityTile(Icons.wc_rounded, "Washroom"),
-                                  _buildAmenityTile(Icons.chair_rounded, "Seating"),
-                                  _buildAmenityTile(Icons.water_drop_rounded, "Water"),
-                                ],
-                              ),
-                            ],
+                      // 5. Amenities Section (Show only if partner configured amenities)
+                      if (amenities.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: GlassContainer(
+                            radius: 24,
+                            useBlur: false,
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text("Amenities", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                    GestureDetector(
+                                      onTap: () => AppToast.show(context, "All amenities dynamic!"),
+                                      child: Text("View All", style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold)),
+                                    )
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                Wrap(
+                                  spacing: 10,
+                                  runSpacing: 10,
+                                  children: amenities.map((item) {
+                                    final aStr = item.toString();
+                                    IconData icon = Icons.check_circle_outline_rounded;
+                                    if (aStr.toLowerCase().contains('light')) icon = Icons.lightbulb_outline_rounded;
+                                    if (aStr.toLowerCase().contains('park')) icon = Icons.local_parking_rounded;
+                                    if (aStr.toLowerCase().contains('room')) icon = Icons.shower_outlined;
+                                    if (aStr.toLowerCase().contains('wifi')) icon = Icons.wifi_rounded;
+                                    if (aStr.toLowerCase().contains('cafe')) icon = Icons.local_cafe_outlined;
+                                    return _buildAmenityTile(icon, aStr);
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
+                        const SizedBox(height: 24),
+                      ],
 
                       // 6. Review Panel
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: GlassContainer(
                           radius: 24,
+                          useBlur: false,
                           padding: const EdgeInsets.all(20),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1929,94 +2090,115 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                     children: [
                                       const Icon(Icons.star_rounded, color: Colors.amber, size: 18),
                                       const SizedBox(width: 6),
-                                      Text("4.5", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                      Text(
+                                        double.tryParse(_venue['avg_rating']?.toString() ?? '0.0')?.toStringAsFixed(1) ?? '0.0',
+                                        style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol),
+                                      ),
                                       const SizedBox(width: 6),
-                                      Text("(128 Reviews)", style: GoogleFonts.sora(fontSize: 12, color: subtextCol)),
+                                      Text("(${reviews.length} Reviews)", style: GoogleFonts.sora(fontSize: 12, color: subtextCol)),
                                     ],
                                   ),
-                                  GestureDetector(
-                                    onTap: () => AppToast.show(context, "Showing all reviews..."),
-                                    child: Text("View All Reviews", style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold)),
+                                  Row(
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () {
+                                          _checkAuthAndExecute(() {
+                                            showModalBottomSheet(
+                                              context: context,
+                                              isScrollControlled: true,
+                                              backgroundColor: Colors.transparent,
+                                              builder: (context) => _ReviewSheet(venueId: widget.venueId, onSubmitted: _loadVenueDetails),
+                                            );
+                                          });
+                                        },
+                                        child: Text("Write Review", style: GoogleFonts.sora(fontSize: 12, color: AppColors.purple, fontWeight: FontWeight.bold)),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      GestureDetector(
+                                        onTap: () => AppToast.show(context, "Latest reviews shown first"),
+                                        child: Text("View All", style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold)),
+                                      ),
+                                    ],
                                   )
                                 ],
                               ),
                               const SizedBox(height: 16),
-                              // Featured Review Card
-                              Row(
-                                children: [
-                                  const CircleAvatar(
-                                    radius: 20,
-                                    backgroundColor: Colors.white10,
-                                    child: Text("R", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
+                              // Latest Review Display
+                              reviews.isEmpty
+                                  ? Center(child: Text("No reviews yet. Be the first to review!", style: GoogleFonts.sora(fontSize: 12, color: subtextCol)))
+                                  : Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
-                                            Text("Rahul Sharma", style: GoogleFonts.sora(fontSize: 13, fontWeight: FontWeight.bold, color: textCol)),
-                                            const SizedBox(width: 6),
-                                            Text("Verified", style: GoogleFonts.sora(fontSize: 10, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                                            CircleAvatar(
+                                              radius: 18,
+                                              backgroundColor: Colors.white10,
+                                              child: Text(
+                                                reviews.last['user']?['name']?.toString().substring(0, 1).toUpperCase() ?? "U",
+                                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Row(
+                                                    children: [
+                                                      Text(
+                                                        reviews.last['user']?['name'] ?? "User",
+                                                        style: GoogleFonts.sora(fontSize: 12, fontWeight: FontWeight.bold, color: textCol),
+                                                      ),
+                                                      const SizedBox(width: 6),
+                                                      Text("Verified user", style: GoogleFonts.sora(fontSize: 9, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                                                    ],
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Row(
+                                                    children: List.generate(
+                                                      reviews.last['rating'] ?? 5,
+                                                      (i) => const Icon(Icons.star_rounded, color: Colors.amber, size: 10),
+                                                    ),
+                                                  )
+                                                ],
+                                              ),
+                                            ),
                                           ],
                                         ),
-                                        const SizedBox(height: 2),
-                                        Row(
-                                          children: List.generate(5, (i) => const Icon(Icons.star_rounded, color: Colors.amber, size: 12)),
-                                        )
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          reviews.last['comment'] ?? '',
+                                          style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.4),
+                                        ),
                                       ],
                                     ),
-                                  ),
-                                  Text("2 days ago", style: GoogleFonts.sora(fontSize: 11, color: subtextCol)),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              Text(
-                                "Excellent turf quality and brilliant LED lighting setup. Changing rooms were clean and staff was highly cooperative.",
-                                style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.4),
-                              ),
-                              const SizedBox(height: 12),
-                              // Dots indicator
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: List.generate(4, (index) => Container(
-                                  width: 6,
-                                  height: 6,
-                                  margin: const EdgeInsets.symmetric(horizontal: 3),
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: index == 0 ? AppColors.pink : borderCol,
-                                  ),
-                                )),
-                              ),
                             ],
                           ),
                         ),
                       ),
                       const SizedBox(height: 24),
 
-                      // 7. Venue Rules Section
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: GlassContainer(
-                          radius: 24,
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("Venue Rules", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
-                              const SizedBox(height: 12),
-                              _buildBulletRule("Sports shoes required on the field"),
-                              _buildBulletRule("Smoking and alcohol are strictly prohibited"),
-                              _buildBulletRule("Please arrive 15 minutes before your booked time slot"),
-                              _buildBulletRule("Outside food is not allowed inside the playground"),
-                              _buildBulletRule("Respect and follow referee instructions"),
-                            ],
+                      // 7. Venue Rules Section (Hide if empty)
+                      if (rules.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: GlassContainer(
+                            radius: 24,
+                            useBlur: false,
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("Venue Rules", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                const SizedBox(height: 12),
+                                ...rules.map((r) => _buildBulletRule(r.toString())),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
+                        const SizedBox(height: 24),
+                      ],
 
                       // 8. Date Selection Slider
                       Padding(
@@ -2032,12 +2214,15 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                         child: ListView(
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.symmetric(horizontal: 20),
-                          children: ["2026-06-20", "2026-06-21", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26"].map((date) {
+                          children: _generateDates().map((date) {
                             final isSelected = _selectedDate == date;
-                            final isToday = date == "2026-06-20";
                             final parsedDate = DateTime.parse(date);
                             final isWeekend = parsedDate.weekday == DateTime.saturday || parsedDate.weekday == DateTime.sunday;
                             final days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+                            
+                            // Correct Today date text calculation
+                            final now = DateTime.now();
+                            final isToday = parsedDate.year == now.year && parsedDate.month == now.month && parsedDate.day == now.day;
                             final dayLabel = isToday ? "Today" : days[parsedDate.weekday - 1];
 
                             return GestureDetector(
@@ -2193,6 +2378,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: GlassContainer(
                           radius: 24,
+                          useBlur: false,
                           padding: const EdgeInsets.all(20),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2203,67 +2389,6 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                 "Free cancellation up to 2 hours before your booking. Late cancellations may incur full or partial slot charges depending on host settings.",
                                 style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.4),
                               ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // 11. Interactive Map Section
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: GlassContainer(
-                          radius: 24,
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("Location Map", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
-                              const SizedBox(height: 12),
-                              Container(
-                                height: 150,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: borderCol),
-                                  color: Colors.white10,
-                                ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(16),
-                                  child: Image.network(
-                                    "https://maps.googleapis.com/maps/api/staticmap?center=23.038,72.587&zoom=15&size=600x300&key=MOCK",
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) => const Center(
-                                      child: Icon(Icons.map_rounded, color: Colors.grey, size: 48),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: () => AppToast.show(context, "Opening Google Maps..."),
-                                      style: OutlinedButton.styleFrom(
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                        side: BorderSide(color: borderCol),
-                                      ),
-                                      child: Text("Open in Maps", style: GoogleFonts.sora(color: Colors.white, fontSize: 12)),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: ElevatedButton(
-                                      onPressed: () => AppToast.show(context, "Starting route navigation..."),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: AppColors.pink,
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                      ),
-                                      child: Text("Navigate", style: GoogleFonts.sora(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-                                    ),
-                                  ),
-                                ],
-                              )
                             ],
                           ),
                         ),
@@ -2300,6 +2425,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                   margin: const EdgeInsets.only(right: 12),
                                   child: GlassContainer(
                                     radius: 20,
+                                    useBlur: false,
                                     padding: EdgeInsets.zero,
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2310,7 +2436,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                             color: Colors.white10,
                                             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                                             image: const DecorationImage(
-                                              image: NetworkImage("https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=150&auto=format&fit=crop"),
+                                              image: NetworkImage("https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=150"),
                                               fit: BoxFit.cover,
                                             ),
                                           ),
@@ -2353,6 +2479,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                   left: 20,
                   right: 20,
                   child: GlassContainer(
+                    useBlur: true,
                     radius: 24,
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                     child: Row(
@@ -2379,22 +2506,24 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                         const SizedBox(width: 12),
                         Container(
                           decoration: BoxDecoration(
-                            gradient: _selectedSlot != null ? AppColors.brandGradient : null,
-                            color: _selectedSlot == null ? Colors.white10 : null,
+                            gradient: (_selectedSlot != null && !isClosed && !allSlotsBooked) ? AppColors.brandGradient : null,
+                            color: (_selectedSlot == null || isClosed || allSlotsBooked) ? Colors.white10 : null,
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: ElevatedButton(
-                            onPressed: _selectedSlot == null
+                            onPressed: (_selectedSlot == null || isClosed || allSlotsBooked)
                                 ? null
                                 : () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) => CheckoutScreen(
-                                          venue: _venue,
-                                          slot: _selectedSlot,
+                                    _checkAuthAndExecute(() {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (context) => CheckoutScreen(
+                                            venue: _venue,
+                                            slot: _selectedSlot,
+                                          ),
                                         ),
-                                      ),
-                                    );
+                                      );
+                                    });
                                   },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
@@ -2406,13 +2535,16 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  "Book Now",
+                                  isClosed
+                                      ? "Currently Closed"
+                                      : (allSlotsBooked ? "Fully Booked" : "Book Now"),
                                   style: GoogleFonts.sora(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
                                 ),
-                                Text(
-                                  "Instant Confirmation",
-                                  style: GoogleFonts.sora(fontSize: 8, color: Colors.white70),
-                                ),
+                                if (!isClosed && !allSlotsBooked)
+                                  Text(
+                                    "Instant Confirmation",
+                                    style: GoogleFonts.sora(fontSize: 8, color: Colors.white70),
+                                  ),
                               ],
                             ),
                           ),
@@ -2423,6 +2555,32 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _buildShimmerLoading() {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 30),
+          const GlassSkeleton(width: double.infinity, height: 260),
+          const SizedBox(height: 20),
+          const GlassSkeleton(width: 250, height: 32),
+          const SizedBox(height: 10),
+          const GlassSkeleton(width: 180, height: 18),
+          const SizedBox(height: 24),
+          Row(
+            children: List.generate(4, (idx) => const Expanded(child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4.0),
+              child: GlassSkeleton(width: double.infinity, height: 60),
+            ))),
+          ),
+          const SizedBox(height: 24),
+          const GlassSkeleton(width: double.infinity, height: 120),
+        ],
+      ),
     );
   }
 
@@ -2447,27 +2605,24 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
   }
 
   Widget _buildAmenityTile(IconData icon, String label) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.04),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: AppColors.pink, size: 14),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: GoogleFonts.sora(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w500),
           ),
-          child: Icon(icon, color: AppColors.pink, size: 18),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: GoogleFonts.sora(fontSize: 9, color: Colors.grey, fontWeight: FontWeight.w500),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -2483,22 +2638,478 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
       ),
     );
   }
+}
 
-  Widget _buildAmenity(IconData icon, String text, Color cardBg, Color textCol, Color borderCol) {
-    return Container(
-      margin: const EdgeInsets.only(right: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: borderCol),
+// -------------------------------------------------------------
+// Write Review Bottom Sheet
+// -------------------------------------------------------------
+class _ReviewSheet extends StatefulWidget {
+  final String venueId;
+  final VoidCallback onSubmitted;
+  const _ReviewSheet({required this.venueId, required this.onSubmitted});
+
+  @override
+  State<_ReviewSheet> createState() => _ReviewSheetState();
+}
+
+class _ReviewSheetState extends State<_ReviewSheet> {
+  double _rating = 5.0;
+  final _commentController = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  void _submitReview() async {
+    final comment = _commentController.text.trim();
+    if (comment.isEmpty) {
+      AppToast.show(context, "Review text cannot be empty", isError: true);
+      return;
+    }
+    setState(() => _submitting = true);
+    final res = await ApiService.createReview(widget.venueId, _rating, comment);
+    setState(() => _submitting = false);
+
+    if (res['success'] == true) {
+      AppToast.show(context, "Review submitted successfully!");
+      widget.onSubmitted();
+      Navigator.pop(context);
+    } else {
+      AppToast.show(context, res['message'] ?? "Failed to submit review", isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textCol = Colors.white;
+    final cardBg = const Color(0xFF131722);
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: Color(0xFF090B10),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Write a Review", style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol)),
+            const SizedBox(height: 16),
+            Text("Select Rating", style: GoogleFonts.sora(fontSize: 13, color: textCol)),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(5, (index) {
+                final starIdx = index + 1;
+                return GestureDetector(
+                  onTap: () => setState(() => _rating = starIdx.toDouble()),
+                  child: Icon(
+                    starIdx <= _rating ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: Colors.amber,
+                    size: 38,
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _commentController,
+              maxLines: 3,
+              style: GoogleFonts.sora(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: "Write your feedback...",
+                hintStyle: GoogleFonts.sora(color: Colors.grey, fontSize: 13),
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _submitting ? null : _submitReview,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.pink,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                child: _submitting
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : Text("Submit Review", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
       ),
-      child: Row(
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// In-App Customer Support Chat Sheet
+// -------------------------------------------------------------
+class _SupportChatSheet extends StatefulWidget {
+  final String partnerId;
+  const _SupportChatSheet({required this.partnerId});
+
+  @override
+  State<_SupportChatSheet> createState() => _SupportChatSheetState();
+}
+
+class _SupportChatSheetState extends State<_SupportChatSheet> {
+  final List<dynamic> _messages = [];
+  final _msgController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  bool _loadingHistory = true;
+  java_timer_support? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+    // Auto-refresh chat every 3 seconds for mock real-time feel
+    _timer = java_timer_support_periodic(const Duration(seconds: 3), (timer) {
+      _loadHistory(quiet: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _msgController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _loadHistory({bool quiet = false}) async {
+    if (!quiet) setState(() => _loadingHistory = true);
+    try {
+      final res = await ApiService.getChatHistory();
+      if (res['success'] == true) {
+        final logs = res['data'] as List<dynamic>? ?? [];
+        if (mounted) {
+          setState(() {
+            _messages.clear();
+            _messages.addAll(logs);
+            _loadingHistory = false;
+          });
+          if (!quiet) _scrollToBottom();
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingHistory = false);
+    }
+  }
+
+  void _sendMessage() async {
+    final txt = _msgController.text.trim();
+    if (txt.isEmpty) return;
+    _msgController.clear();
+    
+    // Optimistic UI updates
+    setState(() {
+      _messages.add({
+        'sender_role': 'user',
+        'text': txt,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
+    _scrollToBottom();
+
+    await ApiService.sendChatMessage(widget.partnerId, txt);
+    _loadHistory(quiet: true);
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textCol = Colors.white;
+    final subtextCol = const Color(0xFF9AA4B2);
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.8,
+      decoration: const BoxDecoration(
+        color: Color(0xFF090B10),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
         children: [
-          Icon(icon, color: AppColors.pink, size: 20),
-          const SizedBox(width: 8),
-          Text(text, style: GoogleFonts.sora(fontSize: 12, color: textCol, fontWeight: FontWeight.w500)),
+          // Drag Indicator & Header
+          const SizedBox(height: 8),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+          Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Row(
+              children: [
+                const CircleAvatar(radius: 20, backgroundColor: AppColors.pink, child: Icon(Icons.support_agent_rounded, color: Colors.white)),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("Chat with Support", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                    Row(
+                      children: [
+                        const CircleAvatar(radius: 3, backgroundColor: Color(0xFF3DDC84)),
+                        const SizedBox(width: 6),
+                        Text("Online", style: GoogleFonts.sora(fontSize: 10, color: const Color(0xFF3DDC84))),
+                      ],
+                    ),
+                  ],
+                ),
+                const Spacer(),
+                IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => Navigator.pop(context)),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: Colors.white10),
+          
+          // Message Logs
+          Expanded(
+            child: _loadingHistory
+                ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(20),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[index];
+                      final isMe = msg['sender_role'] == 'user';
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          decoration: BoxDecoration(
+                            gradient: isMe ? AppColors.brandGradient : null,
+                            color: isMe ? null : Colors.white10,
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(16),
+                              topRight: const Radius.circular(16),
+                              bottomLeft: isMe ? const Radius.circular(16) : Radius.zero,
+                              bottomRight: isMe ? Radius.zero : const Radius.circular(16),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(msg['text'] ?? '', style: GoogleFonts.sora(fontSize: 12, color: Colors.white)),
+                              const SizedBox(height: 4),
+                              Text(
+                                msg['created_at'] != null
+                                    ? DateTime.parse(msg['created_at']).toLocal().toString().substring(11, 16)
+                                    : '',
+                                style: GoogleFonts.sora(fontSize: 8, color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          
+          // Send Input Panel
+          Container(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 8 + MediaQuery.of(context).viewInsets.bottom),
+            color: const Color(0xFF131722),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _msgController,
+                    style: GoogleFonts.sora(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: "Type a message...",
+                      hintStyle: GoogleFonts.sora(color: Colors.grey, fontSize: 13),
+                      border: InputBorder.none,
+                    ),
+                    onSubmitted: (_) => _sendMessage(),
+                  ),
+                ),
+                IconButton(icon: const Icon(Icons.send_rounded, color: AppColors.pink), onPressed: _sendMessage),
+              ],
+            ),
+          )
         ],
+      ),
+    );
+  }
+}
+
+typedef java_timer_support = dynamic;
+dynamic java_timer_support_periodic(Duration duration, void Function(dynamic timer) callback) {
+  return Stream.periodic(duration).listen((_) => callback(null));
+}
+
+// -------------------------------------------------------------
+// In-App Glassmorphic Inline Login Bottom Sheet
+// -------------------------------------------------------------
+void _showLoginSheet(BuildContext context, VoidCallback onLoginSuccess) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => _LoginModalSheet(onSuccess: onLoginSuccess),
+  );
+}
+
+class _LoginModalSheet extends StatefulWidget {
+  final VoidCallback onSuccess;
+  const _LoginModalSheet({required this.onSuccess});
+
+  @override
+  State<_LoginModalSheet> createState() => _LoginModalSheetState();
+}
+
+class _LoginModalSheetState extends State<_LoginModalSheet> {
+  final _phoneController = TextEditingController();
+  final _otpController = TextEditingController();
+  bool _otpSent = false;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    _otpController.dispose();
+    super.dispose();
+  }
+
+  void _sendOtp() async {
+    final phone = _phoneController.text.trim();
+    if (phone.isEmpty) {
+      AppToast.show(context, "Please enter phone number", isError: true);
+      return;
+    }
+    setState(() => _loading = true);
+    final res = await ApiService.requestOtp(phone);
+    setState(() => _loading = false);
+
+    if (res['success'] == true) {
+      setState(() => _otpSent = true);
+      AppToast.show(context, "OTP Sent successfully!");
+    } else {
+      AppToast.show(context, res['message'] ?? "Failed to request OTP", isError: true);
+    }
+  }
+
+  void _verifyOtp() async {
+    final phone = _phoneController.text.trim();
+    final otp = _otpController.text.trim();
+    if (otp.isEmpty) {
+      AppToast.show(context, "Please enter OTP", isError: true);
+      return;
+    }
+    setState(() => _loading = true);
+    final res = await ApiService.verifyOtp(phone, otp);
+    setState(() => _loading = false);
+
+    if (res['success'] == true) {
+      AppToast.show(context, "Login Successful!");
+      Navigator.pop(context);
+      widget.onSuccess();
+    } else {
+      AppToast.show(context, res['message'] ?? "OTP Verification Failed", isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textCol = Colors.white;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: Color(0xFF090B10),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Login Required", style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol)),
+            const SizedBox(height: 8),
+            Text("Please login to proceed with this action.", style: GoogleFonts.sora(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 20),
+            if (!_otpSent) ...[
+              TextField(
+                controller: _phoneController,
+                keyboardType: TextInputType.phone,
+                style: GoogleFonts.sora(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: "Enter Phone Number (e.g. +91...)",
+                  hintStyle: GoogleFonts.sora(color: Colors.grey, fontSize: 13),
+                  filled: true,
+                  fillColor: Colors.white10,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _loading ? null : _sendOtp,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.pink,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  child: _loading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : Text("Send OTP", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ] else ...[
+              TextField(
+                controller: _otpController,
+                keyboardType: TextInputType.number,
+                style: GoogleFonts.sora(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: "Enter OTP Verification Code",
+                  hintStyle: GoogleFonts.sora(color: Colors.grey, fontSize: 13),
+                  filled: true,
+                  fillColor: Colors.white10,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _loading ? null : _verifyOtp,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.pink,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  child: _loading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : Text("Verify & Login", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -4251,6 +4862,7 @@ class GlassContainer extends StatelessWidget {
   final AlignmentGeometry? alignment;
   final BoxBorder? border;
   final Gradient? gradient;
+  final bool useBlur;
 
   const GlassContainer({
     super.key,
@@ -4265,6 +4877,7 @@ class GlassContainer extends StatelessWidget {
     this.alignment,
     this.border,
     this.gradient,
+    this.useBlur = false,
   });
 
   @override
@@ -4325,18 +4938,28 @@ class GlassContainer extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: effectiveBorderRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
-          child: Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              borderRadius: effectiveBorderRadius,
-              border: effectiveBorder,
-              gradient: effectiveGradient,
-            ),
-            child: child,
-          ),
-        ),
+        child: useBlur
+            ? BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
+                child: Container(
+                  padding: padding,
+                  decoration: BoxDecoration(
+                    borderRadius: effectiveBorderRadius,
+                    border: effectiveBorder,
+                    gradient: effectiveGradient,
+                  ),
+                  child: child,
+                ),
+              )
+            : Container(
+                padding: padding,
+                decoration: BoxDecoration(
+                  borderRadius: effectiveBorderRadius,
+                  border: effectiveBorder,
+                  gradient: effectiveGradient,
+                ),
+                child: child,
+              ),
       ),
     );
   }
@@ -4744,7 +5367,7 @@ class ViewAllVenuesScreen extends StatelessWidget {
                     padding: const EdgeInsets.all(0),
                     child: InkWell(
                       onTap: () {
-                        Navigator.of(context).push(
+                        Navigator.of(context, rootNavigator: true).push(
                           MaterialPageRoute(
                             builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
                           ),
@@ -4825,7 +5448,7 @@ class ViewAllVenuesScreen extends StatelessWidget {
                                   ),
                                   child: ElevatedButton(
                                     onPressed: () {
-                                      Navigator.of(context).push(
+                                      Navigator.of(context, rootNavigator: true).push(
                                         MaterialPageRoute(
                                           builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
                                         ),

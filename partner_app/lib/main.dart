@@ -2330,9 +2330,10 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
       _hasLockers = ams.contains("Lockers");
     } else {
       // Default image presets for a new venue
-      _imgController1.text = "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=800";
-      _imgController2.text = "https://images.unsplash.com/photo-1529900748604-07564a03e7a6?w=800";
-      _imgController3.text = "https://images.unsplash.com/photo-1518063319789-7217e6706b04?w=800";
+      // Default image presets for a new venue
+      _imgController1.text = "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=800";
+      _imgController2.text = "https://images.unsplash.com/photo-1517649763962-0c623066013b?q=80&w=800";
+      _imgController3.text = "https://images.unsplash.com/photo-1529900748604-07564a03e7a6?q=80&w=800";
     }
   }
 
@@ -2739,12 +2740,11 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
 
   void _showPresetPicker(TextEditingController controller) {
     final presets = [
-      "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=800",
-      "https://images.unsplash.com/photo-1529900748604-07564a03e7a6?w=800",
-      "https://images.unsplash.com/photo-1531415080290-b9b6928a6211?w=800",
-      "https://images.unsplash.com/photo-1518063319789-7217e6706b04?w=800",
-      "https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?w=800",
-      "https://images.unsplash.com/photo-1546519638-68e109498ffc?w=800",
+      "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=800",
+      "https://images.unsplash.com/photo-1517649763962-0c623066013b?q=80&w=800",
+      "https://images.unsplash.com/photo-1529900748604-07564a03e7a6?q=80&w=800",
+      "https://images.unsplash.com/photo-1546519638-68e109498ffc?q=80&w=800",
+      "https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?q=80&w=800",
     ];
     showDialog(
       context: context,

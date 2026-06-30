@@ -701,6 +701,7 @@ export class AdminService {
         const defaults = {
             platformName: "Athlete's POV",
             supportEmail: "support@athletepov.com",
+            supportPhone: "9427961426",
             minWithdrawal: 1000,
             convenienceFee: 60,
             smtpHost: "",

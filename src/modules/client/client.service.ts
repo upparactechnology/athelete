@@ -409,7 +409,7 @@ export class ClientService {
       try {
         const auth = Buffer.from(`${settings.razorpayKeyId}:${settings.razorpayKeySecret}`).toString('base64');
         const amountInPaise = Math.round(Number(booking.online_amount) * 100);
-        
+
         const response = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: {
@@ -422,7 +422,7 @@ export class ClientService {
             receipt: bookingId
           })
         });
-        
+
         const rzpOrder: any = await response.json();
         if (rzpOrder.id) {
           orderId = rzpOrder.id;
@@ -464,7 +464,7 @@ export class ClientService {
           }
         });
         const paymentDetails: any = await response.json();
-        
+
         if (paymentDetails.order_id !== razorpayOrderId) {
           throw new ValidationError("Payment order ID mismatch");
         }
@@ -678,25 +678,25 @@ export class ClientService {
 
   public static async bulkGenerateSlots(venueId: string, dateStr: string, startTime: string, endTime: string, price: number, durationMinutes: number) {
     const date = new Date(dateStr);
-    
+
     // Parse times
     const [startHour, startMin] = startTime.split(':').map(Number);
     const [endHour, endMin] = endTime.split(':').map(Number);
-    
+
     let current = new Date(date);
     current.setHours(startHour, startMin, 0, 0);
-    
+
     const end = new Date(date);
     end.setHours(endHour, endMin, 0, 0);
-    
+
     const slotsData = [];
     while (current < end) {
       const next = new Date(current.getTime() + durationMinutes * 60000);
       if (next > end) break;
-      
+
       const sTime = `${current.getHours().toString().padStart(2, '0')}:${current.getMinutes().toString().padStart(2, '0')}`;
       const eTime = `${next.getHours().toString().padStart(2, '0')}:${next.getMinutes().toString().padStart(2, '0')}`;
-      
+
       slotsData.push({
         venue_id: venueId,
         date: date,
@@ -705,17 +705,17 @@ export class ClientService {
         price: price,
         status: 'available'
       });
-      
+
       current = next;
     }
-    
+
     // Insert slots
     const created = [];
     for (const data of slotsData) {
       const s = await prisma.slot.create({ data });
       created.push(s);
     }
-    
+
     WebSocketService.broadcast('slots', created);
     return created;
   }
@@ -723,13 +723,13 @@ export class ClientService {
   public static async toggleSlotBlock(slotId: string) {
     const slot = await prisma.slot.findUnique({ where: { slot_id: slotId } });
     if (!slot) throw new NotFoundError("Slot not found");
-    
+
     const newStatus = slot.status === 'blocked_by_partner' ? 'available' : 'blocked_by_partner';
     const updated = await prisma.slot.update({
       where: { slot_id: slotId },
       data: { status: newStatus }
     });
-    
+
     WebSocketService.broadcast('slots', [updated]);
     return updated;
   }
@@ -753,12 +753,12 @@ export class ClientService {
   public static async checkinBooking(bookingId: string) {
     const booking = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
     if (!booking) throw new NotFoundError("Booking not found");
-    
+
     const updated = await prisma.booking.update({
       where: { booking_id: bookingId },
       data: { status: 'CONFIRMED' }
     });
-    
+
     WebSocketService.broadcast('bookings', updated);
     return { success: true, message: "Player checked in successfully", booking: updated };
   }
@@ -820,7 +820,7 @@ export class ClientService {
   public static async replyToReview(reviewId: string, reply: string) {
     const review = await prisma.venueReview.findUnique({ where: { review_id: reviewId } });
     if (!review) throw new NotFoundError("Review not found");
-    
+
     return prisma.venueReview.update({
       where: { review_id: reviewId },
       data: { reply }
@@ -831,14 +831,14 @@ export class ClientService {
     const existing = await prisma.partnerDocument.findFirst({
       where: { partner_id: partnerId, document_type: documentType }
     });
-    
+
     if (existing) {
       return prisma.partnerDocument.update({
         where: { doc_id: existing.doc_id },
         data: { file_url: fileUrl, status: 'pending' }
       });
     }
-    
+
     return prisma.partnerDocument.create({
       data: {
         partner_id: partnerId,
@@ -847,5 +847,20 @@ export class ClientService {
         status: 'pending'
       }
     });
+  }
+
+  public static async sendChatMessage(userId: string, recipientId: string, text: string) {
+    const msg = await prisma.chatMessage.create({
+      data: {
+        sender_id: userId,
+        sender_role: 'user',
+        recipient_id: recipientId,
+        text: text
+      }
+    });
+    try {
+      WebSocketService.broadcast('chat', msg);
+    } catch (_) { }
+    return msg;
   }
 }

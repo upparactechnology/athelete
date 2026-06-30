@@ -1,5 +1,6 @@
 import { ClientService } from './client.service.js';
 import { prisma } from '../../config/prisma.js';
+import { AdminService } from '../admin/admin.service.js';
 export class ClientController {
     // 1. Auth Handlers
     static async requestOtp(req, res, next) {
@@ -438,6 +439,34 @@ export class ClientController {
                 data: { avg_rating: avg }
             });
             res.status(201).json({ success: true, data: review });
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    static async sendChatMessage(req, res, next) {
+        try {
+            const userId = req.user?.id;
+            if (!userId)
+                throw new Error("Unauthorized");
+            const { recipientId, text } = req.body;
+            const data = await ClientService.sendChatMessage(userId, recipientId, text);
+            res.status(201).json({ success: true, data });
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    static async getSystemSettings(req, res, next) {
+        try {
+            const settings = await AdminService.getSettings();
+            res.status(200).json({
+                success: true,
+                data: {
+                    supportPhone: settings.supportPhone || "9427961426",
+                    supportEmail: settings.supportEmail
+                }
+            });
         }
         catch (err) {
             next(err);

@@ -10,6 +10,7 @@ clientRoutes.get('/venues', ClientController.getVenues);
 clientRoutes.get('/venues/:id', ClientController.getVenueDetails);
 clientRoutes.get('/venues/:venueId/slots', ClientController.getVenueSlots);
 clientRoutes.get('/content/banners', ClientController.getBanners);
+clientRoutes.get('/content/settings', ClientController.getSystemSettings);
 // Guarded Routes (Users & Partners)
 clientRoutes.use(authenticate);
 // Profile
@@ -34,6 +35,7 @@ clientRoutes.post('/tournaments/:tournamentId/register', ClientController.regist
 clientRoutes.get('/notifications', ClientController.getNotifications);
 clientRoutes.patch('/notifications/:id/read', ClientController.readNotification);
 clientRoutes.get('/chat/history', ClientController.getChatHistory);
+clientRoutes.post('/chat/send', ClientController.sendChatMessage);
 // Partner Operations
 clientRoutes.get('/partner/venues', ClientController.getPartnerVenues);
 clientRoutes.post('/partner/venues', ClientController.createPartnerVenue);

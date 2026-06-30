@@ -8,7 +8,7 @@ export async function seedDatabase() {
   }
 
   console.log("Cleaning existing database tables before seeding...");
-  
+
   // Clean up order (dependent children tables first)
   await prisma.userMilestone.deleteMany();
   await prisma.partnerDocument.deleteMany();
@@ -175,7 +175,7 @@ export async function seedDatabase() {
 
   const slotsData = [];
   const startTimes = ["06:00", "07:00", "08:00", "17:00", "18:00", "19:00", "20:00"];
-  
+
   for (const date of dates) {
     for (const st of startTimes) {
       const parts = st.split(":");

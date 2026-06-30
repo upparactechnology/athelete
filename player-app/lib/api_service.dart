@@ -228,5 +228,29 @@ class ApiService {
     final res = await http.patch(Uri.parse('$_activeUrl/notifications/$id/read'), headers: await _headers());
     return jsonDecode(res.body);
   }
+
+  // 11. System Settings
+  static Future<Map<String, dynamic>> getSystemSettings() async {
+    final res = await http.get(Uri.parse('$_activeUrl/content/settings'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  // 12. Chat History
+  static Future<Map<String, dynamic>> getChatHistory() async {
+    final res = await http.get(Uri.parse('$_activeUrl/chat/history'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> sendChatMessage(String recipientId, String text) async {
+    final res = await http.post(
+      Uri.parse('$_activeUrl/chat/send'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'recipientId': recipientId,
+        'text': text,
+      }),
+    );
+    return jsonDecode(res.body);
+  }
 }
 
