@@ -7,7 +7,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'websocket_sync.dart';
 import 'api_service.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AppColors {
   static const Color pink = Color(0xFFFF5C93);
@@ -396,13 +399,278 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
+  String _currentLocation = "📍 Select Location";
+  bool _isLocationDialogOpen = false;
+  bool _isPermissionDialogOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _detectLocation();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _detectLocation();
+    }
+  }
+
+  void _detectLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() => _currentLocation = "📍 Select Location");
+        _showLocationDisabledDialog();
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        _showPermissionRequiredDialog();
+        return;
+      }
+      
+      if (permission == LocationPermission.deniedForever) {
+        setState(() => _currentLocation = "📍 Select Location");
+        _showPermissionDeniedForeverDialog();
+        return;
+      }
+
+      _fetchPositionAndLoad();
+    } catch (e) {
+      debugPrint("Geolocator Error: $e");
+      setState(() => _currentLocation = "📍 Select Location");
+    }
+  }
+
+  void _fetchPositionAndLoad() async {
+    try {
+      Position? position = await Geolocator.getLastKnownPosition();
+      if (position == null) {
+        position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 10),
+        );
+      }
+      final area = await _getAreaName(position.latitude, position.longitude);
+      setState(() {
+        _currentLocation = area;
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString("user_last_location", area);
+      await prefs.setDouble("user_latitude", position.latitude);
+      await prefs.setDouble("user_longitude", position.longitude);
+    } catch (e) {
+      debugPrint("Position fetch error: $e");
+    }
+  }
+
+  Future<String> _getAreaName(double lat, double lon) async {
+    try {
+      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon&zoom=14');
+      final response = await http.get(url, headers: {'User-Agent': 'athlete_player_app'});
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final address = data['address'] ?? {};
+        final suburb = address['suburb'] ?? address['neighbourhood'] ?? address['village'] ?? address['subdivision'] ?? '';
+        final city = address['city'] ?? address['town'] ?? address['state'] ?? '';
+        if (suburb.isNotEmpty && city.isNotEmpty) {
+          return "$suburb, $city";
+        } else if (city.isNotEmpty) {
+          return city;
+        } else if (suburb.isNotEmpty) {
+          return suburb;
+        }
+      }
+    } catch (_) {}
+    return "Ahmedabad, Gujarat";
+  }
+
+  void _showGlassDialog({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String description,
+    required String primaryText,
+    required VoidCallback onPrimary,
+    required String secondaryText,
+    required VoidCallback onSecondary,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+        final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            radius: 24,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(
+                  radius: 30,
+                  backgroundColor: iconColor.withOpacity(0.15),
+                  child: Icon(icon, color: iconColor, size: 32),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  title,
+                  style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  description,
+                  style: GoogleFonts.sora(fontSize: 13, color: subtextCol, height: 1.5),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: onSecondary,
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                        child: Text(secondaryText, style: GoogleFonts.sora(fontSize: 14, fontWeight: FontWeight.bold, color: textCol)),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: AppColors.brandGradient,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: ElevatedButton(
+                          onPressed: onPrimary,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          ),
+                          child: Text(primaryText, style: GoogleFonts.sora(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showLocationDisabledDialog() {
+    if (_isLocationDialogOpen) return;
+    _isLocationDialogOpen = true;
+    _showGlassDialog(
+      icon: Icons.location_off_rounded,
+      iconColor: Colors.orangeAccent,
+      title: "Enable Location",
+      description: "Turn on your device location to discover nearby sports venues, accurate distances, and personalized recommendations.",
+      secondaryText: "Not Now",
+      onSecondary: () {
+        _isLocationDialogOpen = false;
+        Navigator.pop(context);
+      },
+      primaryText: "Turn On Location",
+      onPrimary: () {
+        _isLocationDialogOpen = false;
+        Navigator.pop(context);
+        Geolocator.openLocationSettings();
+      },
+    );
+  }
+
+  void _showPermissionRequiredDialog() {
+    if (_isPermissionDialogOpen) return;
+    _isPermissionDialogOpen = true;
+    _showGlassDialog(
+      icon: Icons.my_location_rounded,
+      iconColor: AppColors.pink,
+      title: "Allow Location Access",
+      description: "We use your location to:\n• Find nearby venues\n• Show accurate distances\n• Improve search results\n• Recommend sports facilities\n\nWe never share your location with third parties.",
+      secondaryText: "Skip for Now",
+      onSecondary: () {
+        _isPermissionDialogOpen = false;
+        Navigator.pop(context);
+      },
+      primaryText: "Allow Access",
+      onPrimary: () async {
+        _isPermissionDialogOpen = false;
+        Navigator.pop(context);
+        LocationPermission permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          _showPermissionDeniedDialog();
+        } else if (permission == LocationPermission.deniedForever) {
+          _showPermissionDeniedForeverDialog();
+        } else {
+          _fetchPositionAndLoad();
+        }
+      },
+    );
+  }
+
+  void _showPermissionDeniedDialog() {
+    _showGlassDialog(
+      icon: Icons.gpp_maybe_rounded,
+      iconColor: Colors.redAccent,
+      title: "Location Permission Needed",
+      description: "Without location access, nearby venues and distance calculations won't work correctly.",
+      secondaryText: "Skip",
+      onSecondary: () => Navigator.pop(context),
+      primaryText: "Try Again",
+      onPrimary: () async {
+        Navigator.pop(context);
+        LocationPermission permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+          _fetchPositionAndLoad();
+        }
+      },
+    );
+  }
+
+  void _showPermissionDeniedForeverDialog() {
+    _showGlassDialog(
+      icon: Icons.lock_outline_rounded,
+      iconColor: Colors.red,
+      title: "Location Permission Disabled",
+      description: "Location permission has been permanently disabled. Please enable it from App Settings.",
+      secondaryText: "Cancel",
+      onSecondary: () => Navigator.pop(context),
+      primaryText: "Open Settings",
+      onPrimary: () {
+        Navigator.pop(context);
+        Geolocator.openAppSettings();
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final List<Widget> tabs = [
-      HomeTab(toggleTheme: widget.toggleTheme),
+      HomeTab(toggleTheme: widget.toggleTheme, currentLocation: _currentLocation),
       const BookingsTab(),
       const TournamentsTab(),
       const CouponsTab(),
@@ -518,7 +786,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 // -------------------------------------------------------------
 class HomeTab extends StatefulWidget {
   final VoidCallback toggleTheme;
-  const HomeTab({super.key, required this.toggleTheme});
+  final String currentLocation;
+  const HomeTab({super.key, required this.toggleTheme, required this.currentLocation});
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -528,9 +797,22 @@ class _HomeTabState extends State<HomeTab> {
   List<dynamic> _venues = [];
   List<dynamic> _banners = [];
   String _selectedSport = "All";
-  String _selectedCity = "Madhupura, Gujarat";
+  late String _selectedCity;
   bool _isLoading = true;
   List<dynamic> _notifications = [];
+  final FocusNode _searchFocusNode = FocusNode();
+  bool _isSearchFocused = false;
+
+  // Filter params
+  double _maxPrice = 5000;
+  double _minRating = 0.0;
+
+  final Map<String, Map<String, double>> _cityCoords = {
+    "Madhupura, Gujarat": {"lat": 23.03, "lng": 72.58},
+    "Bengaluru": {"lat": 12.97, "lng": 77.59},
+    "Mumbai": {"lat": 19.07, "lng": 72.87},
+    "Delhi": {"lat": 28.61, "lng": 77.23},
+  };
 
   void _loadNotifications() async {
     try {
@@ -546,17 +828,60 @@ class _HomeTabState extends State<HomeTab> {
   @override
   void initState() {
     super.initState();
+    _selectedCity = widget.currentLocation;
+    if (_selectedCity == "📍 Select Location" || _selectedCity.contains("Select")) {
+      _selectedCity = "Madhupura, Gujarat";
+    }
+    _searchFocusNode.addListener(() {
+      setState(() {
+        _isSearchFocused = _searchFocusNode.hasFocus;
+      });
+    });
     _loadData();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentLocation != widget.currentLocation) {
+      setState(() {
+        _selectedCity = widget.currentLocation;
+        if (_selectedCity == "📍 Select Location" || _selectedCity.contains("Select")) {
+          _selectedCity = "Madhupura, Gujarat";
+        }
+      });
+      _loadData();
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchFocusNode.dispose();
+    super.dispose();
   }
 
   void _loadData() async {
     _loadNotifications();
     setState(() => _isLoading = true);
     final bannerResponse = await ApiService.getBanners();
-    final venueResponse = await ApiService.getVenues(sport: _selectedSport == "All" ? null : _selectedSport);
+    final coords = _cityCoords[_selectedCity] ?? {"lat": 23.03, "lng": 72.58};
+    final venueResponse = await ApiService.getVenues(
+      sport: _selectedSport == "All" ? null : _selectedSport,
+      lat: coords['lat'],
+      lng: coords['lng'],
+    );
+    
+    // Apply client-side filters
+    final rawVenues = venueResponse['data'] as List<dynamic>? ?? [];
+    final filtered = rawVenues.where((v) {
+      final price = double.tryParse(v['base_price']?.toString() ?? '0') ?? 0.0;
+      final rating = double.tryParse(v['avg_rating']?.toString() ?? '0') ?? 0.0;
+      return price <= _maxPrice && rating >= _minRating;
+    }).toList();
+
     setState(() {
       _banners = bannerResponse['data'] ?? [];
-      _venues = venueResponse['data'] ?? [];
+      _venues = filtered;
       _isLoading = false;
     });
   }
@@ -565,41 +890,42 @@ class _HomeTabState extends State<HomeTab> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
-    final subtextCol = isDark ? Colors.white70 : const Color(0xFF4B5563);
+    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+    final borderCol = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.08);
 
     return Scaffold(
       backgroundColor: context.bgCol,
       appBar: AppBar(
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: textCol),
-          onPressed: () {},
-        ),
+        leading: const SizedBox(width: 0),
+        leadingWidth: 0,
         title: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.location_on, color: AppColors.pink, size: 18),
-            const SizedBox(width: 4),
+            const Icon(Icons.location_on_rounded, color: AppColors.pink, size: 20),
+            const SizedBox(width: 6),
             DropdownButton<String>(
               value: _selectedCity,
               underline: const SizedBox(),
-              icon: Icon(Icons.arrow_drop_down, color: textCol, size: 18),
+              icon: Icon(Icons.keyboard_arrow_down_rounded, color: textCol, size: 20),
               style: GoogleFonts.sora(fontSize: 14, fontWeight: FontWeight.bold, color: textCol),
               dropdownColor: context.cardCol,
-              items: ["Madhupura, Gujarat", "Bengaluru", "Mumbai", "Delhi"].map((city) {
+              items: { "Madhupura, Gujarat", "Bengaluru", "Mumbai", "Delhi", _selectedCity }.map((city) {
                 return DropdownMenuItem(value: city, child: Text(city));
               }).toList(),
               onChanged: (val) {
-                if (val != null) setState(() => _selectedCity = val);
+                if (val != null) {
+                  setState(() => _selectedCity = val);
+                  _loadData();
+                }
               },
             ),
           ],
         ),
-        centerTitle: true,
+        centerTitle: false,
         actions: [
           Stack(
             children: [
               IconButton(
-                icon: Icon(Icons.notifications, color: textCol),
+                icon: Icon(Icons.notifications_outlined, color: textCol),
                 onPressed: () {
                   showModalBottomSheet(
                     context: context,
@@ -631,67 +957,54 @@ class _HomeTabState extends State<HomeTab> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 80),
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 100),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("Good Morning 👋", style: GoogleFonts.sora(fontSize: 18, color: textCol)),
-                  const SizedBox(height: 6),
-                  Stack(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8.0),
-                        child: Text(
-                          "Let's Play",
-                          style: GoogleFonts.sora(fontSize: 32, fontWeight: FontWeight.bold, color: textCol),
-                        ),
-                      ),
-                      Positioned(
-                        left: 0,
-                        bottom: 0,
-                        child: Container(
-                          height: 3,
-                          width: 140,
-                          decoration: BoxDecoration(
-                            gradient: AppColors.brandGradient,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                    ],
+                  // 1. Hero Section
+                  Text("Good Morning 👋", style: GoogleFonts.sora(fontSize: 14, color: subtextCol)),
+                  const SizedBox(height: 4),
+                  Text(
+                    "Let's Play",
+                    style: GoogleFonts.sora(fontSize: 30, fontWeight: FontWeight.bold, color: textCol, height: 1.1),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text("Find your perfect turf today", style: GoogleFonts.sora(color: subtextCol, fontSize: 13)),
                   const SizedBox(height: 16),
                   
+                  // 2. Weather & Location Chips
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        height: 42,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
                         decoration: BoxDecoration(
                           color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04),
                           borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: borderCol),
                         ),
                         child: Row(
                           children: [
-                            const Text("☁️", style: TextStyle(fontSize: 12)),
-                            const SizedBox(width: 4),
-                            Text("25°C Cool Breeze 🍃", style: GoogleFonts.sora(fontSize: 11, color: textCol)),
+                            const Text("☀️", style: TextStyle(fontSize: 14)),
+                            const SizedBox(width: 6),
+                            Text("28°C Sunny", style: GoogleFonts.sora(fontSize: 12, color: textCol, fontWeight: FontWeight.w500)),
                           ],
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 10),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        height: 42,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
                         decoration: BoxDecoration(
                           color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04),
                           borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: borderCol),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.navigation, color: Colors.deepOrangeAccent, size: 12),
-                            const SizedBox(width: 4),
-                            Text("Near You", style: GoogleFonts.sora(fontSize: 11, color: textCol)),
+                            const Text("📍", style: TextStyle(fontSize: 14)),
+                            const SizedBox(width: 6),
+                            Text("Near You", style: GoogleFonts.sora(fontSize: 12, color: textCol, fontWeight: FontWeight.w500)),
                           ],
                         ),
                       ),
@@ -699,28 +1012,60 @@ class _HomeTabState extends State<HomeTab> {
                   ),
                   const SizedBox(height: 20),
                   
-                  TextField(
-                    style: GoogleFonts.sora(color: textCol, fontSize: 14),
-                    decoration: InputDecoration(
-                      hintText: "Search venues, sports or areas...",
-                      hintStyle: GoogleFonts.sora(color: Colors.grey),
-                      prefixIcon: const Icon(Icons.search, color: AppColors.pink, size: 20),
-                      filled: true,
-                      fillColor: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05)),
+                  // 3. Search Bar
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: _isSearchFocused ? AppColors.pink : borderCol,
+                        width: _isSearchFocused ? 1.5 : 1.0,
                       ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05)),
+                      boxShadow: _isSearchFocused
+                          ? [BoxShadow(color: AppColors.pink.withOpacity(0.12), blurRadius: 10, spreadRadius: 1)]
+                          : null,
+                    ),
+                    child: TextField(
+                      focusNode: _searchFocusNode,
+                      style: GoogleFonts.sora(color: textCol, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: "Search turfs, sports or locations",
+                        hintStyle: GoogleFonts.sora(color: Colors.grey, fontSize: 13),
+                        prefixIcon: const Icon(Icons.search_rounded, color: AppColors.pink, size: 22),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.tune_rounded, color: AppColors.pink, size: 20),
+                          onPressed: () {
+                            showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              backgroundColor: Colors.transparent,
+                              builder: (context) => FiltersBottomSheet(
+                                currentMaxPrice: _maxPrice,
+                                currentMinRating: _minRating,
+                                currentSport: _selectedSport,
+                                onApply: (maxP, minR, sport) {
+                                  setState(() {
+                                    _maxPrice = maxP;
+                                    _minRating = minR;
+                                  });
+                                  _loadData();
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 16),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 24),
                   
+                  // 4. Sports Categories
                   SizedBox(
-                    height: 40,
+                    height: 44,
                     child: ListView(
                       scrollDirection: Axis.horizontal,
                       children: [
@@ -731,159 +1076,348 @@ class _HomeTabState extends State<HomeTab> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
                   
+                  // 5. Nearby Venues Header
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text("Nearby Venues", style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol)),
-                      Text("Trending 🔥", style: GoogleFonts.sora(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orangeAccent)),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("Nearby Venues", style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol)),
+                          const SizedBox(height: 2),
+                          Text("${_venues.length} venues nearby", style: GoogleFonts.sora(fontSize: 12, color: subtextCol)),
+                        ],
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ViewAllVenuesScreen(venues: _venues),
+                            ),
+                          );
+                        },
+                        child: Text("View All →", style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 13)),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   
+                  // 6. Venue Cards (Major Improvement) & Banners
                   _venues.isEmpty
-                      ? Padding(
-                          padding: const EdgeInsets.only(top: 20.0),
-                          child: Center(child: Text("No venues listed matching this sport.", style: GoogleFonts.sora(color: Colors.grey))),
-                        )
+                      ? _buildEmptyState(textCol, subtextCol)
                       : ListView.builder(
                           shrinkWrap: true,
                           physics: const NeverScrollableScrollPhysics(),
                           itemCount: _venues.length,
                           itemBuilder: (context, index) {
                             final venue = _venues[index];
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 16),
-                              child: GlassContainer(
-                                padding: const EdgeInsets.all(0),
-                                child: InkWell(
-                                  onTap: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
-                                      ),
-                                    );
-                                  },
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Stack(
-                                        children: [
-                                          Container(
-                                            height: 160,
-                                            decoration: BoxDecoration(
-                                              color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
-                                              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                                            ),
-                                            child: const Center(child: Icon(Icons.image, size: 50, color: Colors.grey)),
-                                          ),
-                                          Positioned(
-                                            top: 12,
-                                            left: 12,
-                                            child: Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: Colors.black54,
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Row(
-                                                children: [
-                                                  const Icon(Icons.star, color: Colors.amber, size: 14),
-                                                  const SizedBox(width: 4),
-                                                  Text(
-                                                    venue['avg_rating']?.toString() ?? '0',
-                                                    style: GoogleFonts.sora(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          Positioned(
-                                            top: 12,
-                                            right: 12,
-                                            child: Container(
-                                              padding: const EdgeInsets.all(6),
-                                              decoration: const BoxDecoration(
-                                                color: Colors.black54,
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: const Icon(Icons.favorite_border, color: Colors.white, size: 16),
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 12,
-                                            right: 12,
-                                            child: Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: Colors.black.withOpacity(0.6),
-                                                borderRadius: BorderRadius.circular(10),
-                                              ),
-                                              child: Text(
-                                                "₹${venue['base_price']}/hr",
-                                                style: GoogleFonts.sora(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                              ),
-                                            ),
-                                          )
-                                        ],
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.all(16),
-                                        child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    venue['name'] ?? '',
-                                                    style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    "${_selectedSport == 'All' ? 'Sports' : _selectedSport} • ${_selectedCity.split(',')[0]} • 0 km",
-                                                    style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Container(
-                                              decoration: BoxDecoration(
-                                                gradient: AppColors.brandGradient,
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: ElevatedButton(
-                                                onPressed: () {
-                                                  Navigator.of(context).push(
-                                                    MaterialPageRoute(
-                                                      builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
-                                                    ),
-                                                  );
-                                                },
-                                                style: ElevatedButton.styleFrom(
-                                                  backgroundColor: Colors.transparent,
-                                                  shadowColor: Colors.transparent,
-                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                                ),
-                                                child: Text("Book Now", style: GoogleFonts.sora(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-                                              ),
-                                            )
-                                          ],
-                                        ),
-                                      )
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
+                            final widgetCard = _buildVenueCard(venue, isDark, textCol, subtextCol, borderCol);
+
+                            // Insert featured banner below the first two cards (index == 1)
+                            if (index == 1) {
+                              return Column(
+                                children: [
+                                  widgetCard,
+                                  const SizedBox(height: 8),
+                                  _buildFeaturedBanner(isDark, textCol, subtextCol),
+                                  const SizedBox(height: 20),
+                                ],
+                              );
+                            }
+
+                            return widgetCard;
                           },
                         )
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildEmptyState(Color textCol, Color subtextCol) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Center(
+        child: Column(
+          children: [
+            const Icon(Icons.location_off_rounded, size: 72, color: AppColors.pink),
+            const SizedBox(height: 16),
+            Text("No venues nearby", style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol)),
+            const SizedBox(height: 4),
+            Text("Try changing location", style: GoogleFonts.sora(fontSize: 13, color: subtextCol)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeaturedBanner(bool isDark, Color textCol, Color subtextCol) {
+    return GlassContainer(
+      radius: 24,
+      padding: const EdgeInsets.all(20),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            colors: [AppColors.pink.withOpacity(0.15), AppColors.purple.withOpacity(0.15)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("🔥 Flat 20% OFF", style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.pink)),
+                  const SizedBox(height: 4),
+                  Text("Use code PLAY20 • Book today", style: GoogleFonts.sora(fontSize: 12, color: textCol)),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => AppToast.show(context, "Code PLAY20 applied at checkout!"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white24,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: Text("Claim", style: GoogleFonts.sora(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVenueCard(dynamic venue, bool isDark, Color textCol, Color subtextCol, Color borderCol) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      child: GlassContainer(
+        radius: 24,
+        padding: const EdgeInsets.all(0),
+        child: InkWell(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
+              ),
+            );
+          },
+          borderRadius: BorderRadius.circular(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Hero Image Header
+              Stack(
+                children: [
+                  Container(
+                    height: 180,
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: const Center(child: Icon(Icons.sports_soccer_rounded, size: 64, color: AppColors.pink)),
+                  ),
+                  // Trending Badge
+                  Positioned(
+                    top: 14,
+                    left: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        gradient: AppColors.brandGradient,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        "TRENDING 🔥",
+                        style: GoogleFonts.sora(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                  // Rating Overlay
+                  Positioned(
+                    bottom: 14,
+                    left: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.65),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.star_rounded, color: Colors.amber, size: 14),
+                          const SizedBox(width: 4),
+                          Text(
+                            venue['avg_rating']?.toString() ?? '4.5',
+                            style: GoogleFonts.sora(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Favorite & Verified Button
+                  Positioned(
+                    top: 14,
+                    right: 14,
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.verified_rounded, color: Colors.blueAccent, size: 16),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => AppToast.show(context, "Added to wishlist!"),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.5),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.favorite_rounded, color: AppColors.pink, size: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                venue['name'] ?? '',
+                                style: GoogleFonts.sora(fontSize: 17, fontWeight: FontWeight.bold, color: textCol),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  const Icon(Icons.location_on_rounded, color: Colors.grey, size: 13),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    "${venue['address']?.toString().split(',').first ?? _selectedCity.split(',')[0]} • ${venue['distance']?.toString() ?? '0.8'} km",
+                                    style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Price tag
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              "₹${venue['base_price']}/hr",
+                              style: GoogleFonts.sora(color: AppColors.pink, fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                            Text("Starting from", style: GoogleFonts.sora(color: Colors.grey, fontSize: 10)),
+                          ],
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    // Quick Info
+                    Row(
+                      children: [
+                        const Icon(Icons.sports_soccer_rounded, color: Colors.grey, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          _selectedSport == 'All' ? 'Football' : _selectedSport,
+                          style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                        ),
+                        const SizedBox(width: 12),
+                        const Icon(Icons.access_time_rounded, color: Colors.grey, size: 14),
+                        const SizedBox(width: 4),
+                        Text("Open until 11 PM", style: GoogleFonts.sora(color: subtextCol, fontSize: 12)),
+                        const SizedBox(width: 12),
+                        const Icon(Icons.local_parking_rounded, color: Colors.grey, size: 14),
+                        const SizedBox(width: 4),
+                        Text("Parking", style: GoogleFonts.sora(color: subtextCol, fontSize: 12)),
+                      ],
+                    ),
+                    const Divider(height: 24),
+                    // Card footer small chips
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Wrap(
+                            spacing: 6,
+                            children: [
+                              _buildMiniChip("Flood Lights", isDark),
+                              _buildMiniChip("Parking", isDark),
+                              _buildMiniChip("Changing Room", isDark),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: AppColors.brandGradient,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
+                                ),
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              shadowColor: Colors.transparent,
+                              minimumSize: const Size(90, 36),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                            ),
+                            child: Text("Book Now", style: GoogleFonts.sora(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                          ),
+                        )
+                      ],
+                    )
+                  ],
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniChip(String label, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(label, style: GoogleFonts.sora(fontSize: 10, color: Colors.grey)),
     );
   }
 
@@ -899,7 +1433,7 @@ class _HomeTabState extends State<HomeTab> {
         });
       },
       child: Container(
-        margin: const EdgeInsets.only(right: 8),
+        margin: const EdgeInsets.only(right: 10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           gradient: isSelected ? AppColors.brandGradient : null,
@@ -940,10 +1474,14 @@ class VenueDetailScreen extends StatefulWidget {
 class _VenueDetailScreenState extends State<VenueDetailScreen> {
   Map<String, dynamic> _venue = {};
   List<dynamic> _slots = [];
+  List<dynamic> _similarVenues = [];
   bool _isLoading = true;
   String _selectedDate = "2026-06-20";
   dynamic _selectedSlot;
   bool _isFavorite = false;
+  bool _isAboutExpanded = false;
+  final PageController _imagePageController = PageController();
+  int _currentImageIndex = 0;
 
   @override
   void initState() {
@@ -955,6 +1493,14 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
     setState(() => _isLoading = true);
     final detailResponse = await ApiService.getVenueDetails(widget.venueId);
     final slotsResponse = await ApiService.getSlots(widget.venueId, _selectedDate);
+    try {
+      final simRes = await ApiService.getVenues();
+      if (simRes['success'] == true) {
+        final all = simRes['data'] as List<dynamic>? ?? [];
+        _similarVenues = all.where((v) => v['venue_id'] != widget.venueId).take(5).toList();
+      }
+    } catch (_) {}
+
     if (mounted) {
       setState(() {
         _venue = detailResponse['data'] ?? {};
@@ -967,370 +1513,847 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cardBg = isDark ? AppColors.card : Colors.white;
-    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
-    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
-    final borderCol = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.08);
+    final cardBg = const Color(0xFF131722);
+    final textCol = Colors.white;
+    final subtextCol = const Color(0xFF9AA4B2);
+    final borderCol = Colors.white.withOpacity(0.08);
+
+    final List<String> mockImages = [
+      "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=800&auto=format&fit=crop",
+      "https://images.unsplash.com/photo-1459865264687-595d652de67e?w=800&auto=format&fit=crop",
+      "https://images.unsplash.com/photo-1518063319789-7217e6706b04?w=800&auto=format&fit=crop",
+    ];
+
+    final String aboutText = _venue['description'] ??
+        "Premium FIFA-size football turf with LED floodlights, changing rooms, drinking water, parking, and professional maintenance. Ideal for 5-v-5 and 7-v-7 matches.";
 
     return Scaffold(
-      backgroundColor: context.bgCol,
+      backgroundColor: const Color(0xFF090B10),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : Stack(
               children: [
-                // Scrollable Content
+                // Immersive Scroll View
                 SingleChildScrollView(
-                  padding: const EdgeInsets.only(bottom: 110),
+                  padding: const EdgeInsets.only(bottom: 120),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // 1. Hero Image Section
                       Stack(
                         children: [
-                          ClipRRect(
-                            borderRadius: const BorderRadius.only(
-                              bottomLeft: Radius.circular(32),
-                              bottomRight: Radius.circular(32),
-                            ),
-                            child: Container(
-                              height: 280,
-                              width: double.infinity,
-                              color: Colors.grey.shade900,
-                              child: const Center(
-                                child: Icon(Icons.sports_soccer_rounded, size: 80, color: Colors.white24),
-                              ),
+                          SizedBox(
+                            height: 310,
+                            child: PageView.builder(
+                              controller: _imagePageController,
+                              onPageChanged: (index) {
+                                setState(() {
+                                  _currentImageIndex = index;
+                                });
+                              },
+                              itemCount: mockImages.length,
+                              itemBuilder: (context, idx) {
+                                return Image.network(
+                                  mockImages[idx],
+                                  fit: BoxFit.cover,
+                                  loadingBuilder: (context, child, loadingProgress) {
+                                    if (loadingProgress == null) return child;
+                                    return Container(
+                                      color: Colors.grey.shade900,
+                                      child: const Center(child: CircularProgressIndicator(color: AppColors.pink)),
+                                    );
+                                  },
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Container(
+                                      color: Colors.grey.shade900,
+                                      child: const Center(child: Icon(Icons.sports_soccer_rounded, size: 64, color: Colors.white30)),
+                                    );
+                                  },
+                                );
+                              },
                             ),
                           ),
-                          // Gradient Overlay
+                          // Dark gradient overlay
                           Positioned.fill(
                             child: Container(
                               decoration: BoxDecoration(
-                                borderRadius: const BorderRadius.only(
-                                  bottomLeft: Radius.circular(32),
-                                  bottomRight: Radius.circular(32),
-                                ),
                                 gradient: LinearGradient(
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
                                   colors: [
-                                    Colors.black.withOpacity(0.4),
+                                    Colors.black.withOpacity(0.5),
                                     Colors.transparent,
-                                    Colors.black.withOpacity(0.6),
+                                    const Color(0xFF090B10),
                                   ],
                                 ),
                               ),
                             ),
                           ),
-                          // Back Button
+                          // Float Buttons overlay
                           Positioned(
                             top: 48,
                             left: 16,
-                            child: CircleAvatar(
-                              backgroundColor: Colors.black.withOpacity(0.4),
-                              child: IconButton(
-                                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-                                onPressed: () => Navigator.pop(context),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(20),
+                              child: GlassContainer(
+                                radius: 20,
+                                padding: EdgeInsets.zero,
+                                child: CircleAvatar(
+                                  backgroundColor: Colors.transparent,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                                    onPressed: () => Navigator.pop(context),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
-                          // Share & Favorite Buttons
                           Positioned(
                             top: 48,
                             right: 16,
                             child: Row(
                               children: [
-                                CircleAvatar(
-                                  backgroundColor: Colors.black.withOpacity(0.4),
-                                  child: IconButton(
-                                    icon: const Icon(Icons.share_rounded, color: Colors.white, size: 20),
-                                    onPressed: () => AppToast.show(context, "Link shared!"),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: GlassContainer(
+                                    radius: 20,
+                                    padding: EdgeInsets.zero,
+                                    child: CircleAvatar(
+                                      backgroundColor: Colors.transparent,
+                                      child: IconButton(
+                                        icon: const Icon(Icons.share_rounded, color: Colors.white, size: 18),
+                                        onPressed: () => AppToast.show(context, "Link copied to clipboard!"),
+                                      ),
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                CircleAvatar(
-                                  backgroundColor: Colors.black.withOpacity(0.4),
-                                  child: IconButton(
-                                    icon: Icon(
-                                      _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                                      color: _isFavorite ? AppColors.pink : Colors.white,
-                                      size: 20,
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: GlassContainer(
+                                    radius: 20,
+                                    padding: EdgeInsets.zero,
+                                    child: CircleAvatar(
+                                      backgroundColor: Colors.transparent,
+                                      child: IconButton(
+                                        icon: Icon(
+                                          _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                          color: _isFavorite ? AppColors.pink : Colors.white,
+                                          size: 18,
+                                        ),
+                                        onPressed: () {
+                                          setState(() => _isFavorite = !_isFavorite);
+                                          AppToast.show(context, _isFavorite ? "Saved to favorites!" : "Removed from favorites!");
+                                        },
+                                      ),
                                     ),
-                                    onPressed: () {
-                                      setState(() {
-                                        _isFavorite = !_isFavorite;
-                                      });
-                                      AppToast.show(context, _isFavorite ? "Added to favorites!" : "Removed from favorites!");
-                                    },
                                   ),
                                 ),
                               ],
                             ),
                           ),
+                          // Image carousel counter
+                          Positioned(
+                            bottom: 20,
+                            right: 20,
+                            child: GlassContainer(
+                              radius: 12,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              child: Text(
+                                "${_currentImageIndex + 1}/${mockImages.length}",
+                                style: GoogleFonts.sora(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
 
-                      // 2. Venue Information
+                      // 2. Venue Information Card
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Expanded(
                                   child: Text(
-                                    _venue['name'] ?? 'Sports Venue',
-                                    style: GoogleFonts.sora(fontSize: 22, fontWeight: FontWeight.bold, color: textCol),
+                                    _venue['name'] ?? 'Elite Turf Arena',
+                                    style: GoogleFonts.sora(fontSize: 26, fontWeight: FontWeight.bold, color: textCol),
                                   ),
                                 ),
+                                const SizedBox(width: 12),
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: AppColors.pink.withOpacity(0.1),
+                                    color: const Color(0xFF3DDC84).withOpacity(0.12),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      const Icon(Icons.verified_user_rounded, color: AppColors.pink, size: 14),
+                                      const Icon(Icons.verified_rounded, color: Color(0xFF3DDC84), size: 13),
                                       const SizedBox(width: 4),
-                                      Text("VERIFIED", style: GoogleFonts.sora(color: AppColors.pink, fontSize: 10, fontWeight: FontWeight.bold)),
+                                      Text("VERIFIED", style: GoogleFonts.sora(color: const Color(0xFF3DDC84), fontSize: 9, fontWeight: FontWeight.bold)),
                                     ],
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 10),
                             Row(
                               children: [
-                                const Icon(Icons.star_rounded, color: Colors.amber, size: 20),
+                                const Icon(Icons.star_rounded, color: Colors.amber, size: 18),
                                 const SizedBox(width: 4),
                                 Text(
-                                  _venue['avg_rating']?.toString() ?? '4.8',
-                                  style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14),
+                                  _venue['avg_rating']?.toString() ?? '4.5',
+                                  style: GoogleFonts.sora(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 6),
                                 Text(
-                                  "(${_venue['reviews']?.length ?? 12} reviews)",
-                                  style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                                  "•  ${_venue['reviews']?.length ?? 128} Reviews",
+                                  style: GoogleFonts.sora(color: subtextCol, fontSize: 13),
                                 ),
                                 const SizedBox(width: 12),
-                                Text("•", style: TextStyle(color: subtextCol)),
+                                Text("•", style: TextStyle(color: borderCol)),
                                 const SizedBox(width: 12),
+                                const Icon(Icons.location_on_rounded, color: AppColors.pink, size: 14),
+                                const SizedBox(width: 4),
                                 Text(
                                   "2.4 km away",
-                                  style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                                  style: GoogleFonts.sora(color: subtextCol, fontSize: 13, fontWeight: FontWeight.w500),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 24),
-
-                            // 3. Amenities Section
-                            Text(
-                              "Amenities",
-                              style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                const Icon(Icons.location_city_rounded, color: Colors.grey, size: 14),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    _venue['address'] ?? 'Madhupura, Ahmedabad, Gujarat',
+                                    style: GoogleFonts.sora(color: subtextCol, fontSize: 13),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              height: 74,
-                              child: ListView(
-                                scrollDirection: Axis.horizontal,
+                            const SizedBox(height: 10),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    const CircleAvatar(radius: 4, backgroundColor: Color(0xFF3DDC84)),
+                                    const SizedBox(width: 8),
+                                    Text("Open until 11:00 PM", style: GoogleFonts.sora(color: const Color(0xFF3DDC84), fontSize: 13, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text("Starting From ", style: GoogleFonts.sora(fontSize: 10, color: subtextCol)),
+                                    Text(
+                                      "₹${_venue['base_price'] ?? '1500'}/hr",
+                                      style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.pink),
+                                    ),
+                                  ],
+                                )
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 3. Quick Action Buttons
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          children: [
+                            _buildQuickAction(Icons.phone_rounded, "Call", Colors.green, () {
+                              AppToast.show(context, "Dialing host: ${_venue['contact_phone'] ?? '9427961426'}");
+                            }),
+                            const SizedBox(width: 8),
+                            _buildQuickAction(Icons.chat_bubble_rounded, "WhatsApp", const Color(0xFF3DDC84), () {
+                              AppToast.show(context, "Opening WhatsApp chat...");
+                            }),
+                            const SizedBox(width: 8),
+                            _buildQuickAction(Icons.directions_rounded, "Directions", Colors.blue, () {
+                              AppToast.show(context, "Calculating route to turf...");
+                            }),
+                            const SizedBox(width: 8),
+                            _buildQuickAction(
+                              _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                              "Save Venue",
+                              AppColors.pink,
+                              () {
+                                setState(() => _isFavorite = !_isFavorite);
+                                AppToast.show(context, _isFavorite ? "Added to saved list!" : "Removed from saved list!");
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 4. About Venue Card
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassContainer(
+                          radius: 24,
+                          padding: const EdgeInsets.all(20),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text("About this Venue", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      aboutText,
+                                      style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.5),
+                                      maxLines: _isAboutExpanded ? null : 3,
+                                      overflow: _isAboutExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    GestureDetector(
+                                      onTap: () => setState(() => _isAboutExpanded = !_isAboutExpanded),
+                                      child: Text(
+                                        _isAboutExpanded ? "Read Less" : "Read More",
+                                        style: GoogleFonts.sora(fontSize: 11, color: AppColors.pink, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              // Map preview
+                              Container(
+                                width: 90,
+                                height: 90,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.04),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: borderCol),
+                                ),
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(16),
+                                      child: Opacity(
+                                        opacity: 0.6,
+                                        child: Image.network(
+                                          "https://maps.googleapis.com/maps/api/staticmap?center=23.03,72.58&zoom=14&size=100x100&key=MOCK",
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) => const Icon(Icons.map_rounded, color: Colors.grey, size: 28),
+                                        ),
+                                      ),
+                                    ),
+                                    const Icon(Icons.location_on_rounded, color: AppColors.pink, size: 32),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 5. Amenities Section
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassContainer(
+                          radius: 24,
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  _buildAmenity(Icons.lightbulb_outline_rounded, "Floodlights", cardBg, textCol, borderCol),
-                                  _buildAmenity(Icons.local_parking_rounded, "Parking", cardBg, textCol, borderCol),
-                                  _buildAmenity(Icons.shower_outlined, "Changing Room", cardBg, textCol, borderCol),
-                                  _buildAmenity(Icons.local_cafe_outlined, "Cafe", cardBg, textCol, borderCol),
-                                  _buildAmenity(Icons.wifi_rounded, "WiFi", cardBg, textCol, borderCol),
-                                  _buildAmenity(Icons.ac_unit_rounded, "AC", cardBg, textCol, borderCol),
+                                  Text("Amenities", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                  GestureDetector(
+                                    onTap: () => AppToast.show(context, "All amenities unlocked!"),
+                                    child: Text("View All", style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold)),
+                                  )
                                 ],
                               ),
-                            ),
-                            const SizedBox(height: 24),
+                              const SizedBox(height: 16),
+                              GridView.count(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                crossAxisCount: 5,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 12,
+                                childAspectRatio: 0.8,
+                                children: [
+                                  _buildAmenityTile(Icons.lightbulb_outline_rounded, "Lights"),
+                                  _buildAmenityTile(Icons.local_parking_rounded, "Parking"),
+                                  _buildAmenityTile(Icons.shower_outlined, "Changing"),
+                                  _buildAmenityTile(Icons.local_cafe_rounded, "Cafe"),
+                                  _buildAmenityTile(Icons.wifi_rounded, "Wi-Fi"),
+                                  _buildAmenityTile(Icons.lock_rounded, "Lockers"),
+                                  _buildAmenityTile(Icons.medical_services_outlined, "First Aid"),
+                                  _buildAmenityTile(Icons.wc_rounded, "Washroom"),
+                                  _buildAmenityTile(Icons.chair_rounded, "Seating"),
+                                  _buildAmenityTile(Icons.water_drop_rounded, "Water"),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
 
-                            // 4. Date & Slots Picker
-                            Text(
-                              "Select Date & Slots",
-                              style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
-                            ),
-                            const SizedBox(height: 12),
-                            // Improved Date Selection slider
-                            SizedBox(
-                              height: 76,
-                              child: ListView(
-                                scrollDirection: Axis.horizontal,
-                                children: ["2026-06-20", "2026-06-21", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25"].map((date) {
-                                  final isSelected = _selectedDate == date;
-                                  final isToday = date == "2026-06-20";
+                      // 6. Review Panel
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassContainer(
+                          radius: 24,
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.star_rounded, color: Colors.amber, size: 18),
+                                      const SizedBox(width: 6),
+                                      Text("4.5", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                      const SizedBox(width: 6),
+                                      Text("(128 Reviews)", style: GoogleFonts.sora(fontSize: 12, color: subtextCol)),
+                                    ],
+                                  ),
+                                  GestureDetector(
+                                    onTap: () => AppToast.show(context, "Showing all reviews..."),
+                                    child: Text("View All Reviews", style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold)),
+                                  )
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              // Featured Review Card
+                              Row(
+                                children: [
+                                  const CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor: Colors.white10,
+                                    child: Text("R", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text("Rahul Sharma", style: GoogleFonts.sora(fontSize: 13, fontWeight: FontWeight.bold, color: textCol)),
+                                            const SizedBox(width: 6),
+                                            Text("Verified", style: GoogleFonts.sora(fontSize: 10, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Row(
+                                          children: List.generate(5, (i) => const Icon(Icons.star_rounded, color: Colors.amber, size: 12)),
+                                        )
+                                      ],
+                                    ),
+                                  ),
+                                  Text("2 days ago", style: GoogleFonts.sora(fontSize: 11, color: subtextCol)),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                "Excellent turf quality and brilliant LED lighting setup. Changing rooms were clean and staff was highly cooperative.",
+                                style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.4),
+                              ),
+                              const SizedBox(height: 12),
+                              // Dots indicator
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: List.generate(4, (index) => Container(
+                                  width: 6,
+                                  height: 6,
+                                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: index == 0 ? AppColors.pink : borderCol,
+                                  ),
+                                )),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 7. Venue Rules Section
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassContainer(
+                          radius: 24,
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Venue Rules", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                              const SizedBox(height: 12),
+                              _buildBulletRule("Sports shoes required on the field"),
+                              _buildBulletRule("Smoking and alcohol are strictly prohibited"),
+                              _buildBulletRule("Please arrive 15 minutes before your booked time slot"),
+                              _buildBulletRule("Outside food is not allowed inside the playground"),
+                              _buildBulletRule("Respect and follow referee instructions"),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 8. Date Selection Slider
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Text(
+                          "Select Date",
+                          style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 76,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          children: ["2026-06-20", "2026-06-21", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26"].map((date) {
+                            final isSelected = _selectedDate == date;
+                            final isToday = date == "2026-06-20";
+                            final parsedDate = DateTime.parse(date);
+                            final isWeekend = parsedDate.weekday == DateTime.saturday || parsedDate.weekday == DateTime.sunday;
+                            final days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+                            final dayLabel = isToday ? "Today" : days[parsedDate.weekday - 1];
+
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedDate = date;
+                                  _selectedSlot = null;
+                                  _loadVenueDetails();
+                                });
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 250),
+                                curve: Curves.easeOutCubic,
+                                width: 68,
+                                margin: const EdgeInsets.only(right: 12),
+                                decoration: BoxDecoration(
+                                  gradient: isSelected ? AppColors.brandGradient : null,
+                                  color: isSelected ? null : cardBg,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: isSelected ? Colors.transparent : (isWeekend ? Colors.redAccent.withOpacity(0.3) : borderCol),
+                                  ),
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      dayLabel,
+                                      style: GoogleFonts.sora(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: isSelected ? Colors.white70 : (isWeekend ? Colors.redAccent : subtextCol),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      date.substring(8),
+                                      style: GoogleFonts.sora(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                        color: isSelected ? Colors.white : (isWeekend ? Colors.redAccent : textCol),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 9. Time Slot Selection Grid
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Text(
+                          "Select Time Slot",
+                          style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: _slots.isEmpty
+                            ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(28.0),
+                                  child: Column(
+                                    children: [
+                                      Icon(Icons.event_busy_rounded, size: 48, color: Colors.grey.withOpacity(0.5)),
+                                      const SizedBox(height: 12),
+                                      Text("No slots available for this date", style: GoogleFonts.sora(color: subtextCol, fontSize: 13)),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 3,
+                                  mainAxisSpacing: 10,
+                                  crossAxisSpacing: 10,
+                                  childAspectRatio: 1.8,
+                                ),
+                                itemCount: _slots.length,
+                                itemBuilder: (context, index) {
+                                  final slot = _slots[index];
+                                  final isBooked = slot['status'] == 'booked';
+                                  final isBlocked = slot['status'] == 'blocked_by_partner';
+                                  final isSelected = _selectedSlot != null && _selectedSlot['slot_id'] == slot['slot_id'];
+
+                                  Color slotBg = cardBg;
+                                  Color txtCol = textCol;
+                                  String statusText = "Available";
+                                  Color statusColor = const Color(0xFF3DDC84);
+                                  Border border = Border.all(color: borderCol);
+
+                                  if (isBooked) {
+                                    slotBg = const Color(0xFFFF5A5F).withOpacity(0.1);
+                                    txtCol = const Color(0xFFFF5A5F);
+                                    statusText = "Booked";
+                                    statusColor = const Color(0xFFFF5A5F);
+                                    border = Border.all(color: const Color(0xFFFF5A5F).withOpacity(0.3));
+                                  } else if (isBlocked) {
+                                    slotBg = Colors.white.withOpacity(0.04);
+                                    txtCol = Colors.grey;
+                                    statusText = "Unavailable";
+                                    statusColor = Colors.grey;
+                                  } else if (isSelected) {
+                                    slotBg = Colors.transparent;
+                                    txtCol = Colors.white;
+                                    statusText = "Selected";
+                                    statusColor = Colors.white;
+                                    border = Border.all(color: Colors.transparent);
+                                  }
 
                                   return GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedDate = date;
-                                        _selectedSlot = null;
-                                        _loadVenueDetails();
-                                      });
-                                    },
+                                    onTap: (isBooked || isBlocked)
+                                        ? null
+                                        : () => setState(() => _selectedSlot = slot),
                                     child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 250),
-                                      curve: Curves.easeOutCubic,
-                                      width: 68,
-                                      margin: const EdgeInsets.only(right: 12),
+                                      duration: const Duration(milliseconds: 200),
                                       decoration: BoxDecoration(
                                         gradient: isSelected ? AppColors.brandGradient : null,
-                                        color: isSelected ? null : cardBg,
+                                        color: isSelected ? null : slotBg,
                                         borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: isSelected ? Colors.transparent : borderCol,
-                                        ),
+                                        border: border,
                                       ),
                                       child: Column(
                                         mainAxisAlignment: MainAxisAlignment.center,
                                         children: [
                                           Text(
-                                            isToday ? "Today" : "Jun",
-                                            style: GoogleFonts.sora(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                              color: isSelected ? Colors.white70 : subtextCol,
-                                            ),
+                                            slot['start_time'] ?? '',
+                                            style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: txtCol, fontSize: 13),
                                           ),
-                                          const SizedBox(height: 4),
+                                          const SizedBox(height: 2),
                                           Text(
-                                            date.substring(8),
-                                            style: GoogleFonts.sora(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w800,
-                                              color: isSelected ? Colors.white : textCol,
-                                            ),
+                                            isBooked ? "❌ Booked" : (isSelected ? "✅ Selected" : "₹${slot['price']}"),
+                                            style: GoogleFonts.sora(fontSize: 10, color: isSelected ? Colors.white : statusColor, fontWeight: FontWeight.bold),
                                           ),
                                         ],
                                       ),
                                     ),
                                   );
-                                }).toList(),
+                                },
                               ),
-                            ),
-                            const SizedBox(height: 20),
+                      ),
+                      const SizedBox(height: 24),
 
-                            // 5. Slots Layout
-                            _slots.isEmpty
-                                ? Center(
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(28.0),
-                                      child: Column(
-                                        children: [
-                                          Icon(Icons.event_busy_rounded, size: 48, color: Colors.grey.withOpacity(0.5)),
-                                          const SizedBox(height: 12),
-                                          Text(
-                                            "No slots available for this date",
-                                            style: GoogleFonts.sora(color: subtextCol, fontSize: 13),
-                                          ),
-                                          const SizedBox(height: 12),
-                                          OutlinedButton(
-                                            onPressed: () {
-                                              setState(() {
-                                                _selectedDate = "2026-06-20";
-                                                _loadVenueDetails();
-                                              });
-                                            },
-                                            style: OutlinedButton.styleFrom(
-                                              side: const BorderSide(color: AppColors.pink),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                            ),
-                                            child: Text("Choose another date", style: GoogleFonts.sora(color: AppColors.pink, fontSize: 12, fontWeight: FontWeight.bold)),
-                                          )
-                                        ],
+                      // 10. Cancellation Policy Card
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassContainer(
+                          radius: 24,
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Cancellation Policy", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                              const SizedBox(height: 8),
+                              Text(
+                                "Free cancellation up to 2 hours before your booking. Late cancellations may incur full or partial slot charges depending on host settings.",
+                                style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.4),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 11. Interactive Map Section
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassContainer(
+                          radius: 24,
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Location Map", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                              const SizedBox(height: 12),
+                              Container(
+                                height: 150,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: borderCol),
+                                  color: Colors.white10,
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Image.network(
+                                    "https://maps.googleapis.com/maps/api/staticmap?center=23.038,72.587&zoom=15&size=600x300&key=MOCK",
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) => const Center(
+                                      child: Icon(Icons.map_rounded, color: Colors.grey, size: 48),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      onPressed: () => AppToast.show(context, "Opening Google Maps..."),
+                                      style: OutlinedButton.styleFrom(
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                        side: BorderSide(color: borderCol),
                                       ),
+                                      child: Text("Open in Maps", style: GoogleFonts.sora(color: Colors.white, fontSize: 12)),
                                     ),
-                                  )
-                                : GridView.builder(
-                                    shrinkWrap: true,
-                                    physics: const NeverScrollableScrollPhysics(),
-                                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: 3,
-                                      mainAxisSpacing: 12,
-                                      crossAxisSpacing: 12,
-                                      childAspectRatio: 2.1,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      onPressed: () => AppToast.show(context, "Starting route navigation..."),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppColors.pink,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                      ),
+                                      child: Text("Navigate", style: GoogleFonts.sora(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
                                     ),
-                                    itemCount: _slots.length,
-                                    itemBuilder: (context, index) {
-                                      final slot = _slots[index];
-                                      final isBooked = slot['status'] == 'booked';
-                                      final isBlocked = slot['status'] == 'blocked_by_partner';
-                                      final isSelected = _selectedSlot != null && _selectedSlot['slot_id'] == slot['slot_id'];
+                                  ),
+                                ],
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
 
-                                      Color cardBgColor = cardBg;
-                                      Color textTextColor = textCol;
-                                      Color subtitleColor = subtextCol;
-                                      Border? cardBorder = Border.all(color: borderCol);
-
-                                      if (isBooked) {
-                                        cardBgColor = Colors.red.withOpacity(0.08);
-                                        textTextColor = Colors.redAccent.withOpacity(0.7);
-                                        subtitleColor = Colors.redAccent.withOpacity(0.5);
-                                        cardBorder = Border.all(color: Colors.red.withOpacity(0.2));
-                                      } else if (isBlocked) {
-                                        cardBgColor = Colors.grey.withOpacity(0.08);
-                                        textTextColor = Colors.grey.withOpacity(0.6);
-                                        subtitleColor = Colors.grey.withOpacity(0.4);
-                                        cardBorder = Border.all(color: Colors.grey.withOpacity(0.1));
-                                      } else if (isSelected) {
-                                        cardBgColor = Colors.transparent;
-                                        textTextColor = Colors.white;
-                                        subtitleColor = Colors.white70;
-                                        cardBorder = null;
-                                      }
-
-                                      return GestureDetector(
-                                        onTap: (isBooked || isBlocked)
-                                            ? null
-                                            : () {
-                                                setState(() {
-                                                  _selectedSlot = slot;
-                                                });
-                                              },
-                                        child: AnimatedContainer(
-                                          duration: const Duration(milliseconds: 200),
+                      // 12. Similar Venues Slider
+                      if (_similarVenues.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Text(
+                            "Similar Venues Nearby",
+                            style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 160,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: _similarVenues.length,
+                            itemBuilder: (context, index) {
+                              final item = _similarVenues[index];
+                              return GestureDetector(
+                                onTap: () {
+                                  Navigator.pushReplacement(
+                                    context,
+                                    MaterialPageRoute(builder: (context) => VenueDetailScreen(venueId: item['venue_id'])),
+                                  );
+                                },
+                                child: Container(
+                                  width: 150,
+                                  margin: const EdgeInsets.only(right: 12),
+                                  child: GlassContainer(
+                                    radius: 20,
+                                    padding: EdgeInsets.zero,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          height: 80,
                                           decoration: BoxDecoration(
-                                            gradient: isSelected ? AppColors.brandGradient : null,
-                                            color: isSelected ? null : cardBgColor,
-                                            borderRadius: BorderRadius.circular(14),
-                                            border: cardBorder,
-                                            boxShadow: isSelected
-                                                ? [BoxShadow(color: AppColors.pink.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))]
-                                                : null,
+                                            color: Colors.white10,
+                                            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                                            image: const DecorationImage(
+                                              image: NetworkImage("https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=150&auto=format&fit=crop"),
+                                              fit: BoxFit.cover,
+                                            ),
                                           ),
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.all(8.0),
                                           child: Column(
-                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                slot['start_time'] ?? '',
-                                                style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textTextColor, fontSize: 13),
+                                                item['name'] ?? 'Turf',
+                                                style: GoogleFonts.sora(fontSize: 11, fontWeight: FontWeight.bold, color: textCol),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
                                               const SizedBox(height: 2),
                                               Text(
-                                                isBooked ? "Booked" : "₹${slot['price']}",
-                                                style: GoogleFonts.sora(fontSize: 10, color: subtitleColor),
+                                                "Starting from ₹${item['base_price']}",
+                                                style: GoogleFonts.sora(fontSize: 9, color: AppColors.pink, fontWeight: FontWeight.bold),
                                               ),
                                             ],
                                           ),
                                         ),
-                                      );
-                                    },
+                                      ],
+                                    ),
                                   ),
-                          ],
+                                ),
+                              );
+                            },
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
-                // 6. Sticky Floating Bottom Booking Bar
+
+                // 13. Sticky Floating Bottom Booking Bar
                 Positioned(
                   bottom: 20,
                   left: 20,
                   right: 20,
                   child: GlassContainer(
-                    radius: 20,
+                    radius: 24,
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                     child: Row(
                       children: [
@@ -1341,7 +2364,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                             children: [
                               Text(
                                 _selectedSlot != null ? "Selected Slot" : "Choose a Slot",
-                                style: GoogleFonts.sora(fontSize: 11, color: subtextCol),
+                                style: GoogleFonts.sora(fontSize: 10, color: subtextCol, fontWeight: FontWeight.w500),
                               ),
                               const SizedBox(height: 4),
                               Text(
@@ -1358,7 +2381,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                           decoration: BoxDecoration(
                             gradient: _selectedSlot != null ? AppColors.brandGradient : null,
                             color: _selectedSlot == null ? Colors.white10 : null,
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(20),
                           ),
                           child: ElevatedButton(
                             onPressed: _selectedSlot == null
@@ -1377,11 +2400,20 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                               backgroundColor: Colors.transparent,
                               shadowColor: Colors.transparent,
                               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                             ),
-                            child: Text(
-                              "Book Now",
-                              style: GoogleFonts.sora(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  "Book Now",
+                                  style: GoogleFonts.sora(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                                Text(
+                                  "Instant Confirmation",
+                                  style: GoogleFonts.sora(fontSize: 8, color: Colors.white70),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -1391,6 +2423,64 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _buildQuickAction(IconData icon, String label, Color color, VoidCallback onTap) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: GlassContainer(
+          radius: 16,
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 18),
+              const SizedBox(height: 4),
+              Text(label, style: GoogleFonts.sora(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAmenityTile(IconData icon, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+          ),
+          child: Icon(icon, color: AppColors.pink, size: 18),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: GoogleFonts.sora(fontSize: 9, color: Colors.grey, fontWeight: FontWeight.w500),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBulletRule(String rule) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("• ", style: TextStyle(color: AppColors.pink, fontSize: 14)),
+          Expanded(child: Text(rule, style: GoogleFonts.sora(fontSize: 12, color: const Color(0xFF9AA4B2)))),
+        ],
+      ),
     );
   }
 
@@ -2883,6 +3973,32 @@ class _ProfileTabState extends State<ProfileTab> {
                   ),
                   const SizedBox(height: 20),
 
+                  // Location Settings
+                  _buildSectionHeader(textCol, "Location Settings"),
+                  Card(
+                    color: cardBg,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: borderCol)),
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.location_on_rounded, color: AppColors.pink),
+                          title: Text("Current Location Status", style: TextStyle(color: textCol)),
+                          subtitle: const Text("Allowed", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          title: Text("Manage Location Permission", style: TextStyle(color: textCol, fontWeight: FontWeight.bold)),
+                          trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.pink),
+                          onTap: () {
+                            AppToast.show(context, "Opening App Settings...");
+                            Geolocator.openAppSettings();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
                   // 12. Support & Help
                   _buildSectionHeader(textCol, "Support & Help"),
                   Card(
@@ -3574,6 +4690,287 @@ class _AdminChatWidgetState extends State<_AdminChatWidget> {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// View All Venues Screen
+// -------------------------------------------------------------
+class ViewAllVenuesScreen extends StatelessWidget {
+  final List<dynamic> venues;
+  const ViewAllVenuesScreen({super.key, required this.venues});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+    final borderCol = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.08);
+
+    return Scaffold(
+      backgroundColor: context.bgCol,
+      appBar: AppBar(
+        title: Text("All Venues", style: GoogleFonts.sora(color: textCol, fontWeight: FontWeight.bold, fontSize: 16)),
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_rounded, color: textCol),
+          onPressed: () => Navigator.pop(context),
+        ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+      ),
+      body: venues.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.sports_soccer_rounded, size: 72, color: Colors.grey),
+                  const SizedBox(height: 16),
+                  Text("No venues listed", style: GoogleFonts.sora(fontSize: 16, color: textCol, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(20),
+              itemCount: venues.length,
+              itemBuilder: (context, index) {
+                final venue = venues[index];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 20),
+                  child: GlassContainer(
+                    radius: 24,
+                    padding: const EdgeInsets.all(0),
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
+                          ),
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Stack(
+                            children: [
+                              Container(
+                                height: 160,
+                                decoration: BoxDecoration(
+                                  color: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.03),
+                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                ),
+                                child: const Center(child: Icon(Icons.sports_soccer_rounded, size: 64, color: AppColors.pink)),
+                              ),
+                              Positioned(
+                                top: 12,
+                                left: 12,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.65),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.star_rounded, color: Colors.amber, size: 14),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        venue['avg_rating']?.toString() ?? '4.5',
+                                        style: GoogleFonts.sora(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        venue['name'] ?? '',
+                                        style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
+                                      ),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.location_on_rounded, color: Colors.grey, size: 13),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            "${venue['address']?.toString().split(',').first ?? 'Ahmedabad'} • ${venue['distance']?.toString() ?? '0.8'} km",
+                                            style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        "₹${venue['base_price']}/hr Starting from",
+                                        style: GoogleFonts.sora(color: AppColors.pink, fontSize: 13, fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    gradient: AppColors.brandGradient,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (context) => VenueDetailScreen(venueId: venue['venue_id']),
+                                        ),
+                                      );
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.transparent,
+                                      shadowColor: Colors.transparent,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                    ),
+                                    child: Text("Book Now", style: GoogleFonts.sora(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                                  ),
+                                )
+                              ],
+                            ),
+                          )
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// Filters Bottom Sheet
+// -------------------------------------------------------------
+class FiltersBottomSheet extends StatefulWidget {
+  final Function(double maxPrice, double minRating, String sport) onApply;
+  final double currentMaxPrice;
+  final double currentMinRating;
+  final String currentSport;
+
+  const FiltersBottomSheet({
+    super.key,
+    required this.onApply,
+    required this.currentMaxPrice,
+    required this.currentMinRating,
+    required this.currentSport,
+  });
+
+  @override
+  State<FiltersBottomSheet> createState() => _FiltersBottomSheetState();
+}
+
+class _FiltersBottomSheetState extends State<FiltersBottomSheet> {
+  late double _maxPrice;
+  late double _minRating;
+  late String _sport;
+
+  @override
+  void initState() {
+    super.initState();
+    _maxPrice = widget.currentMaxPrice;
+    _minRating = widget.currentMinRating;
+    _sport = widget.currentSport;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final cardBg = isDark ? AppColors.card : Colors.white;
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.surface : const Color(0xFFF5F7FB),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text("Filters", style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol)),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              )
+            ],
+          ),
+          const Divider(),
+          const SizedBox(height: 16),
+          Text("Max Price (per hour): ₹${_maxPrice.toInt()}", style: GoogleFonts.sora(fontSize: 14, color: textCol, fontWeight: FontWeight.bold)),
+          Slider(
+            value: _maxPrice,
+            min: 500,
+            max: 5000,
+            divisions: 9,
+            activeColor: AppColors.pink,
+            onChanged: (val) => setState(() => _maxPrice = val),
+          ),
+          const SizedBox(height: 16),
+          Text("Minimum Rating: ${_minRating.toStringAsFixed(1)} ★", style: GoogleFonts.sora(fontSize: 14, color: textCol, fontWeight: FontWeight.bold)),
+          Slider(
+            value: _minRating,
+            min: 0.0,
+            max: 5.0,
+            divisions: 10,
+            activeColor: AppColors.purple,
+            onChanged: (val) => setState(() => _minRating = val),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () {
+                    setState(() {
+                      _maxPrice = 5000;
+                      _minRating = 0.0;
+                    });
+                  },
+                  child: Text("Reset", style: GoogleFonts.sora(fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: AppColors.brandGradient,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ElevatedButton(
+                    onPressed: () {
+                      widget.onApply(_maxPrice, _minRating, _sport);
+                      Navigator.pop(context);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      shadowColor: Colors.transparent,
+                    ),
+                    child: Text("Apply Filters", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
+                ),
+              ),
+            ],
+          )
         ],
       ),
     );

@@ -287,9 +287,8 @@ export class ClientService {
           };
         });
 
-        // Filter: Find venues within 10 km and sort by nearest
+        // Sort by nearest first (display all venues near or far)
         return mappedVenues
-          .filter((v: any) => v.distance <= 10.0)
           .sort((a: any, b: any) => a.distance - b.distance);
       }
     }
