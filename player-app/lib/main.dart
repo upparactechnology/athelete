@@ -942,6 +942,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
   bool _isLoading = true;
   String _selectedDate = "2026-06-20";
   dynamic _selectedSlot;
+  bool _isFavorite = false;
 
   @override
   void initState() {
@@ -953,196 +954,461 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
     setState(() => _isLoading = true);
     final detailResponse = await ApiService.getVenueDetails(widget.venueId);
     final slotsResponse = await ApiService.getSlots(widget.venueId, _selectedDate);
-    setState(() {
-      _venue = detailResponse['data'] ?? {};
-      _slots = slotsResponse['data'] ?? [];
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _venue = detailResponse['data'] ?? {};
+        _slots = slotsResponse['data'] ?? [];
+        _isLoading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardBg = isDark ? AppColors.card : Colors.white;
+    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+    final borderCol = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.08);
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_venue['name'] ?? 'Venue Details'),
-        elevation: 0,
-      ),
+      backgroundColor: context.bgCol,
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF10B981)))
-          : SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    height: 200,
-                    color: Colors.grey.shade800,
-                    child: const Center(child: Icon(Icons.image, size: 80, color: Colors.grey)),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_venue['name'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const Icon(Icons.star, color: Colors.amber, size: 20),
-                            const SizedBox(width: 4),
-                            Text(_venue['avg_rating']?.toString() ?? '4.8', style: const TextStyle(fontWeight: FontWeight.bold)),
-                            const SizedBox(width: 8),
-                            Text("(${_venue['reviews']?.length ?? 0} reviews)", style: const TextStyle(color: Colors.grey)),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        const Text("Amenities", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildAmenity(Icons.lightbulb, "Flood Lights"),
-                            _buildAmenity(Icons.local_parking, "Parking"),
-                            _buildAmenity(Icons.shower, "Change Room"),
-                            _buildAmenity(Icons.local_cafe, "Drinks"),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-                        const Text("Select Date & Slots", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 12),
-                        // Calendar Picker Slider
-                        SizedBox(
-                          height: 60,
-                          child: ListView(
-                            scrollDirection: Axis.horizontal,
-                            children: ["2026-06-20", "2026-06-21", "2026-06-22", "2026-06-23", "2026-06-24"].map((date) {
-                              final isSelected = _selectedDate == date;
-                              return GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _selectedDate = date;
-                                    _selectedSlot = null;
-                                    _loadVenueDetails();
-                                  });
-                                },
-                                child: Container(
-                                  width: 80,
-                                  margin: const EdgeInsets.only(right: 12),
-                                  decoration: BoxDecoration(
-                                    color: isSelected ? const Color(0xFF10B981) : theme.colorScheme.surface,
-                                    borderRadius: BorderRadius.circular(12),
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
+          : Stack(
+              children: [
+                // Scrollable Content
+                SingleChildScrollView(
+                  padding: const EdgeInsets.only(bottom: 110),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 1. Hero Image Section
+                      Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: const BorderRadius.only(
+                              bottomLeft: Radius.circular(32),
+                              bottomRight: Radius.circular(32),
+                            ),
+                            child: Container(
+                              height: 280,
+                              width: double.infinity,
+                              color: Colors.grey.shade900,
+                              child: const Center(
+                                child: Icon(Icons.sports_soccer_rounded, size: 80, color: Colors.white24),
+                              ),
+                            ),
+                          ),
+                          // Gradient Overlay
+                          Positioned.fill(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                borderRadius: const BorderRadius.only(
+                                  bottomLeft: Radius.circular(32),
+                                  bottomRight: Radius.circular(32),
+                                ),
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.black.withOpacity(0.4),
+                                    Colors.transparent,
+                                    Colors.black.withOpacity(0.6),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          // Back Button
+                          Positioned(
+                            top: 48,
+                            left: 16,
+                            child: CircleAvatar(
+                              backgroundColor: Colors.black.withOpacity(0.4),
+                              child: IconButton(
+                                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                            ),
+                          ),
+                          // Share & Favorite Buttons
+                          Positioned(
+                            top: 48,
+                            right: 16,
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  backgroundColor: Colors.black.withOpacity(0.4),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.share_rounded, color: Colors.white, size: 20),
+                                    onPressed: () => AppToast.show(context, "Link shared!"),
                                   ),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
+                                ),
+                                const SizedBox(width: 12),
+                                CircleAvatar(
+                                  backgroundColor: Colors.black.withOpacity(0.4),
+                                  child: IconButton(
+                                    icon: Icon(
+                                      _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                      color: _isFavorite ? AppColors.pink : Colors.white,
+                                      size: 20,
+                                    ),
+                                    onPressed: () {
+                                      setState(() {
+                                        _isFavorite = !_isFavorite;
+                                      });
+                                      AppToast.show(context, _isFavorite ? "Added to favorites!" : "Removed from favorites!");
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+
+                      // 2. Venue Information
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _venue['name'] ?? 'Sports Venue',
+                                    style: GoogleFonts.sora(fontSize: 22, fontWeight: FontWeight.bold, color: textCol),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.pink.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
                                     children: [
-                                      Text(date.substring(8), style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isSelected ? Colors.white : null)),
-                                      Text(date.substring(5, 7), style: TextStyle(fontSize: 12, color: isSelected ? Colors.white70 : Colors.grey)),
+                                      const Icon(Icons.verified_user_rounded, color: AppColors.pink, size: 14),
+                                      const SizedBox(width: 4),
+                                      Text("VERIFIED", style: GoogleFonts.sora(color: AppColors.pink, fontSize: 10, fontWeight: FontWeight.bold)),
                                     ],
                                   ),
                                 ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        // Slots Grid
-                        _slots.isEmpty
-                            ? const Text("No slots generated for this date.")
-                            : GridView.builder(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 3,
-                                  mainAxisSpacing: 10,
-                                  crossAxisSpacing: 10,
-                                  childAspectRatio: 2.2,
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Icon(Icons.star_rounded, color: Colors.amber, size: 20),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _venue['avg_rating']?.toString() ?? '4.8',
+                                  style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14),
                                 ),
-                                itemCount: _slots.length,
-                                itemBuilder: (context, index) {
-                                  final slot = _slots[index];
-                                  final isBooked = slot['status'] == 'booked';
-                                  final isBlocked = slot['status'] == 'blocked_by_partner';
-                                  final isSelected = _selectedSlot != null && _selectedSlot['slot_id'] == slot['slot_id'];
+                                const SizedBox(width: 8),
+                                Text(
+                                  "(${_venue['reviews']?.length ?? 12} reviews)",
+                                  style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                                ),
+                                const SizedBox(width: 12),
+                                Text("•", style: TextStyle(color: subtextCol)),
+                                const SizedBox(width: 12),
+                                Text(
+                                  "2.4 km away",
+                                  style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 24),
 
-                                  Color bg = theme.colorScheme.surface;
-                                  Color textColor = Colors.white;
+                            // 3. Amenities Section
+                            Text(
+                              "Amenities",
+                              style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
+                            ),
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              height: 74,
+                              child: ListView(
+                                scrollDirection: Axis.horizontal,
+                                children: [
+                                  _buildAmenity(Icons.lightbulb_outline_rounded, "Floodlights", cardBg, textCol, borderCol),
+                                  _buildAmenity(Icons.local_parking_rounded, "Parking", cardBg, textCol, borderCol),
+                                  _buildAmenity(Icons.shower_outlined, "Changing Room", cardBg, textCol, borderCol),
+                                  _buildAmenity(Icons.local_cafe_outlined, "Cafe", cardBg, textCol, borderCol),
+                                  _buildAmenity(Icons.wifi_rounded, "WiFi", cardBg, textCol, borderCol),
+                                  _buildAmenity(Icons.ac_unit_rounded, "AC", cardBg, textCol, borderCol),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 24),
 
-                                  if (isBooked) {
-                                    bg = Colors.red.shade900.withOpacity(0.4);
-                                    textColor = Colors.red.shade300;
-                                  } else if (isBlocked) {
-                                    bg = Colors.grey.shade800;
-                                    textColor = Colors.grey;
-                                  } else if (isSelected) {
-                                    bg = const Color(0xFF10B981);
-                                    textColor = Colors.white;
-                                  }
+                            // 4. Date & Slots Picker
+                            Text(
+                              "Select Date & Slots",
+                              style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
+                            ),
+                            const SizedBox(height: 12),
+                            // Improved Date Selection slider
+                            SizedBox(
+                              height: 76,
+                              child: ListView(
+                                scrollDirection: Axis.horizontal,
+                                children: ["2026-06-20", "2026-06-21", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25"].map((date) {
+                                  final isSelected = _selectedDate == date;
+                                  final isToday = date == "2026-06-20";
 
                                   return GestureDetector(
-                                    onTap: (isBooked || isBlocked)
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              _selectedSlot = slot;
-                                            });
-                                          },
-                                    child: Container(
+                                    onTap: () {
+                                      setState(() {
+                                        _selectedDate = date;
+                                        _selectedSlot = null;
+                                        _loadVenueDetails();
+                                      });
+                                    },
+                                    child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 250),
+                                      curve: Curves.easeOutCubic,
+                                      width: 68,
+                                      margin: const EdgeInsets.only(right: 12),
                                       decoration: BoxDecoration(
-                                        color: bg,
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: isSelected ? Border.all(color: Colors.white, width: 1.5) : null,
+                                        gradient: isSelected ? AppColors.brandGradient : null,
+                                        color: isSelected ? null : cardBg,
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: isSelected ? Colors.transparent : borderCol,
+                                        ),
                                       ),
                                       child: Column(
                                         mainAxisAlignment: MainAxisAlignment.center,
                                         children: [
-                                          Text(slot['start_time'] ?? '', style: TextStyle(fontWeight: FontWeight.bold, color: textColor)),
-                                          Text("₹${slot['price']}", style: TextStyle(fontSize: 12, color: isSelected ? Colors.white70 : Colors.grey)),
+                                          Text(
+                                            isToday ? "Today" : "Jun",
+                                            style: GoogleFonts.sora(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: isSelected ? Colors.white70 : subtextCol,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            date.substring(8),
+                                            style: GoogleFonts.sora(
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w800,
+                                              color: isSelected ? Colors.white : textCol,
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
                                   );
-                                },
+                                }).toList(),
                               ),
-                        const SizedBox(height: 30),
-                        ElevatedButton(
-                          onPressed: _selectedSlot == null
-                              ? null
-                              : () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (context) => CheckoutScreen(
-                                        venue: _venue,
-                                        slot: _selectedSlot,
+                            ),
+                            const SizedBox(height: 20),
+
+                            // 5. Slots Layout
+                            _slots.isEmpty
+                                ? Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(28.0),
+                                      child: Column(
+                                        children: [
+                                          Icon(Icons.event_busy_rounded, size: 48, color: Colors.grey.withOpacity(0.5)),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            "No slots available for this date",
+                                            style: GoogleFonts.sora(color: subtextCol, fontSize: 13),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          OutlinedButton(
+                                            onPressed: () {
+                                              setState(() {
+                                                _selectedDate = "2026-06-20";
+                                                _loadVenueDetails();
+                                              });
+                                            },
+                                            style: OutlinedButton.styleFrom(
+                                              side: const BorderSide(color: AppColors.pink),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                            ),
+                                            child: Text("Choose another date", style: GoogleFonts.sora(color: AppColors.pink, fontSize: 12, fontWeight: FontWeight.bold)),
+                                          )
+                                        ],
                                       ),
                                     ),
-                                  );
-                                },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10B981),
-                            minimumSize: const Size(double.infinity, 50),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  )
+                                : GridView.builder(
+                                    shrinkWrap: true,
+                                    physics: const NeverScrollableScrollPhysics(),
+                                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: 3,
+                                      mainAxisSpacing: 12,
+                                      crossAxisSpacing: 12,
+                                      childAspectRatio: 2.1,
+                                    ),
+                                    itemCount: _slots.length,
+                                    itemBuilder: (context, index) {
+                                      final slot = _slots[index];
+                                      final isBooked = slot['status'] == 'booked';
+                                      final isBlocked = slot['status'] == 'blocked_by_partner';
+                                      final isSelected = _selectedSlot != null && _selectedSlot['slot_id'] == slot['slot_id'];
+
+                                      Color cardBgColor = cardBg;
+                                      Color textTextColor = textCol;
+                                      Color subtitleColor = subtextCol;
+                                      Border? cardBorder = Border.all(color: borderCol);
+
+                                      if (isBooked) {
+                                        cardBgColor = Colors.red.withOpacity(0.08);
+                                        textTextColor = Colors.redAccent.withOpacity(0.7);
+                                        subtitleColor = Colors.redAccent.withOpacity(0.5);
+                                        cardBorder = Border.all(color: Colors.red.withOpacity(0.2));
+                                      } else if (isBlocked) {
+                                        cardBgColor = Colors.grey.withOpacity(0.08);
+                                        textTextColor = Colors.grey.withOpacity(0.6);
+                                        subtitleColor = Colors.grey.withOpacity(0.4);
+                                        cardBorder = Border.all(color: Colors.grey.withOpacity(0.1));
+                                      } else if (isSelected) {
+                                        cardBgColor = Colors.transparent;
+                                        textTextColor = Colors.white;
+                                        subtitleColor = Colors.white70;
+                                        cardBorder = null;
+                                      }
+
+                                      return GestureDetector(
+                                        onTap: (isBooked || isBlocked)
+                                            ? null
+                                            : () {
+                                                setState(() {
+                                                  _selectedSlot = slot;
+                                                });
+                                              },
+                                        child: AnimatedContainer(
+                                          duration: const Duration(milliseconds: 200),
+                                          decoration: BoxDecoration(
+                                            gradient: isSelected ? AppColors.brandGradient : null,
+                                            color: isSelected ? null : cardBgColor,
+                                            borderRadius: BorderRadius.circular(14),
+                                            border: cardBorder,
+                                            boxShadow: isSelected
+                                                ? [BoxShadow(color: AppColors.pink.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))]
+                                                : null,
+                                          ),
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                slot['start_time'] ?? '',
+                                                style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textTextColor, fontSize: 13),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                isBooked ? "Booked" : "₹${slot['price']}",
+                                                style: GoogleFonts.sora(fontSize: 10, color: subtitleColor),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // 6. Sticky Floating Bottom Booking Bar
+                Positioned(
+                  bottom: 20,
+                  left: 20,
+                  right: 20,
+                  child: GlassContainer(
+                    radius: 20,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _selectedSlot != null ? "Selected Slot" : "Choose a Slot",
+                                style: GoogleFonts.sora(fontSize: 11, color: subtextCol),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _selectedSlot != null
+                                    ? "${_selectedSlot['start_time']} • ₹${_selectedSlot['price']}"
+                                    : "No slot selected",
+                                style: GoogleFonts.sora(fontSize: 14, fontWeight: FontWeight.bold, color: textCol),
+                              ),
+                            ],
                           ),
-                          child: const Text("Select Date & Slots", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-                        )
+                        ),
+                        const SizedBox(width: 12),
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: _selectedSlot != null ? AppColors.brandGradient : null,
+                            color: _selectedSlot == null ? Colors.white10 : null,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: ElevatedButton(
+                            onPressed: _selectedSlot == null
+                                ? null
+                                : () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => CheckoutScreen(
+                                          venue: _venue,
+                                          slot: _selectedSlot,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              shadowColor: Colors.transparent,
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                            child: Text(
+                              "Book Now",
+                              style: GoogleFonts.sora(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
-                  )
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
     );
   }
 
-  Widget _buildAmenity(IconData icon, String text) {
-    return Column(
-      children: [
-        CircleAvatar(
-          backgroundColor: Colors.grey.shade800,
-          child: Icon(icon, color: const Color(0xFF10B981)),
-        ),
-        const SizedBox(height: 4),
-        Text(text, style: const TextStyle(fontSize: 12)),
-      ],
+  Widget _buildAmenity(IconData icon, String text, Color cardBg, Color textCol, Color borderCol) {
+    return Container(
+      margin: const EdgeInsets.only(right: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderCol),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: AppColors.pink, size: 20),
+          const SizedBox(width: 8),
+          Text(text, style: GoogleFonts.sora(fontSize: 12, color: textCol, fontWeight: FontWeight.w500)),
+        ],
+      ),
     );
   }
 }
@@ -1169,20 +1435,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   void _applyCoupon() async {
     final code = _couponController.text.trim();
     if (code.isEmpty) return;
-    // Simulate lookup coupon
     setState(() {
-      _discount = double.parse(widget.slot['price']) * 0.1; // 10% mock discount
+      _discount = double.parse(widget.slot['price'].toString()) * 0.1; // 10% mock discount
       _appliedCouponCode = code;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Coupon "$code" applied! 10% Discount')),
-    );
+    AppToast.show(context, 'Coupon "$code" applied! 10% Discount');
   }
 
   void _processPayment() async {
     setState(() => _isLoading = true);
 
-    // 1. Create booking in pending status
     final mode = _payOnline ? "online" : "pay_at_venue";
     final bookingRes = await ApiService.createBooking(
       widget.venue['venue_id'],
@@ -1193,9 +1455,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     if (bookingRes['success'] != true) {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Failed to lock slot and create booking.")),
-      );
+      AppToast.show(context, "Failed to lock slot and create booking.", isError: true);
       return;
     }
 
@@ -1203,82 +1463,170 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final bookingId = booking['booking_id'];
 
     if (mode == "pay_at_venue") {
-      // Direct success for deposit/cash
       setState(() => _isLoading = false);
+      booking['slot'] = widget.slot;
+      booking['venue'] = widget.venue;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (context) => ConfirmationScreen(booking: booking),
         ),
       );
     } else {
-      // 2. Initiate payment record
       final payInit = await ApiService.initiatePayment(bookingId);
       final orderId = payInit['orderId'];
 
-      // 3. Mock payment sheet popup
       await Future.delayed(const Duration(seconds: 1));
 
-      // Show mock Razorpay dialog overlay
       if (!mounted) return;
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.payment, color: Color(0xFF10B981)),
-              SizedBox(width: 8),
-              Text("Razorpay Sandbox"),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text("Order ID: $orderId"),
-              const SizedBox(height: 8),
-              Text("Pay securely: ₹${booking['online_amount']}"),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                setState(() => _isLoading = false);
-              },
-              child: const Text("Cancel"),
+        builder: (context) => Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E2638), // Razorpay brand color theme
+              borderRadius: BorderRadius.circular(20),
             ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                // 4. Verify payment
-                final mockPayId = "pay_${MathUtils.randomString(14)}";
-                final verifyRes = await ApiService.verifyPayment(bookingId, orderId, mockPayId);
-                if (verifyRes['success'] == true) {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) => ConfirmationScreen(booking: verifyRes['data']),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Image.network(
+                      'https://razorpay.com/assets/razorpay-glyph.svg',
+                      height: 28,
+                      errorBuilder: (c, e, s) => const Icon(Icons.payment_rounded, color: Colors.blue, size: 28),
                     ),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Payment verification failed")),
-                  );
-                }
-                setState(() => _isLoading = false);
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
-              child: const Text("Simulate Success", style: TextStyle(color: Colors.white)),
-            )
-          ],
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        "TEST MODE",
+                        style: GoogleFonts.sora(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    )
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  widget.venue['name'] ?? 'Sports Arena',
+                  style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Order ID: $orderId",
+                  style: GoogleFonts.sora(fontSize: 12, color: Colors.white70),
+                ),
+                const Divider(color: Colors.white24, height: 28),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text("Total Amount", style: GoogleFonts.sora(color: Colors.white70, fontSize: 13)),
+                    Text(
+                      "₹${booking['online_amount']}",
+                      style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                // Payment Method Simulation options
+                Text("Select Simulated Payment Method:", style: GoogleFonts.sora(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 12),
+                _buildRazorpayMethod(Icons.qr_code_rounded, "UPI / GooglePay"),
+                _buildRazorpayMethod(Icons.credit_card_rounded, "Card (Visa/Mastercard)"),
+                _buildRazorpayMethod(Icons.account_balance_rounded, "Netbanking"),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          setState(() => _isLoading = false);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.white30),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: Text("Cancel", style: GoogleFonts.sora(color: Colors.white70)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          Navigator.of(context).pop();
+                          final mockPayId = "pay_${MathUtils.randomString(14)}";
+                          final verifyRes = await ApiService.verifyPayment(bookingId, orderId, mockPayId);
+                          if (verifyRes['success'] == true) {
+                            final finalBooking = verifyRes['data'];
+                            finalBooking['slot'] = widget.slot;
+                            finalBooking['venue'] = widget.venue;
+                            Navigator.of(context).pushReplacement(
+                              MaterialPageRoute(
+                                builder: (context) => ConfirmationScreen(booking: finalBooking),
+                              ),
+                            );
+                          } else {
+                            AppToast.show(context, "Payment verification failed", isError: true);
+                          }
+                          setState(() => _isLoading = false);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: Text("Pay Success", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+                      ),
+                    )
+                  ],
+                )
+              ],
+            ),
+          ),
         ),
       );
     }
   }
 
+  Widget _buildRazorpayMethod(IconData icon, String label) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.blueAccent, size: 20),
+          const SizedBox(width: 12),
+          Text(label, style: GoogleFonts.sora(color: Colors.white, fontSize: 13)),
+          const Spacer(),
+          const Icon(Icons.chevron_right_rounded, color: Colors.white30, size: 18),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final price = double.parse(widget.slot['price']);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+    final borderCol = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.08);
+
+    final price = double.parse(widget.slot['price'].toString());
     final finalPrice = price - _discount;
     final convenience = finalPrice * 0.04;
     final gst = finalPrice * 0.03 * 0.18;
@@ -1288,119 +1636,209 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final outstanding = total * 0.7;
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Checkout")),
+      backgroundColor: context.bgCol,
+      appBar: AppBar(
+        title: Text("Checkout", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+      ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF10B981)))
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Venue details card
-                  Card(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 60,
-                            height: 60,
-                            color: Colors.grey.shade800,
-                            child: const Icon(Icons.image),
+                  GlassContainer(
+                    radius: 20,
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 60,
+                          height: 60,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                          const SizedBox(width: 12),
-                          Column(
+                          child: const Icon(Icons.sports_soccer_rounded, color: AppColors.pink, size: 28),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(widget.venue['name'] ?? '', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                              Text("Time: ${widget.slot['start_time']} - ${widget.slot['end_time']}", style: const TextStyle(color: Colors.grey)),
+                              Text(
+                                widget.venue['name'] ?? '',
+                                style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: textCol),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                "Time: ${widget.slot['start_time']} - ${widget.slot['end_time']}",
+                                style: GoogleFonts.sora(color: subtextCol, fontSize: 13),
+                              ),
                             ],
-                          )
-                        ],
-                      ),
+                          ),
+                        )
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 24),
+
                   // Coupon Code
-                  const Text("Have a coupon code?", style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
+                  Text("Have a coupon code?", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14)),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: _couponController,
-                          decoration: const InputDecoration(
+                          style: GoogleFonts.sora(color: textCol),
+                          decoration: InputDecoration(
                             hintText: "Enter code (e.g. PLAY10)",
+                            hintStyle: GoogleFonts.sora(color: Colors.grey, fontSize: 13),
                             filled: true,
-                            border: OutlineInputBorder(),
+                            fillColor: isDark ? Colors.white.withOpacity(0.02) : Colors.black.withOpacity(0.02),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                           ),
                         ),
                       ),
                       const SizedBox(width: 12),
-                      ElevatedButton(
-                        onPressed: _applyCoupon,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF10B981),
-                          minimumSize: const Size(80, 50),
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: AppColors.brandGradient,
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Text("Apply", style: TextStyle(color: Colors.white)),
+                        child: ElevatedButton(
+                          onPressed: _applyCoupon,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          child: Text("Apply", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ),
                       )
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
+
                   // Payment options split
-                  const Text("Payment Options", style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  RadioListTile<bool>(
-                    title: const Text("Pay Online (Full Amount)"),
-                    subtitle: const Text("Pay now and enjoy your game"),
-                    value: true,
-                    groupValue: _payOnline,
-                    activeColor: const Color(0xFF10B981),
-                    onChanged: (val) => setState(() => _payOnline = val!),
-                  ),
-                  RadioListTile<bool>(
-                    title: const Text("Pay at Venue (Split Deposit)"),
-                    subtitle: const Text("Pay 30% online now & 70% cash at court"),
-                    value: false,
-                    groupValue: _payOnline,
-                    activeColor: const Color(0xFF10B981),
-                    onChanged: (val) => setState(() => _payOnline = val!),
-                  ),
-                  const SizedBox(height: 24),
-                  // Detailed price breakdown
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
+                  Text("Payment Options", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14)),
+                  const SizedBox(height: 10),
+                  GestureDetector(
+                    onTap: () => setState(() => _payOnline = true),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: _payOnline ? AppColors.pink.withOpacity(0.08) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: _payOnline ? AppColors.pink.withOpacity(0.3) : borderCol),
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
                         children: [
-                          _buildPriceRow("Slot Price", "₹${price.toStringAsFixed(2)}"),
-                          if (_discount > 0) _buildPriceRow("Discount Applied", "-₹${_discount.toStringAsFixed(2)}", color: Colors.green),
-                          _buildPriceRow("Convenience Fee (4%)", "₹${convenience.toStringAsFixed(2)}"),
-                          _buildPriceRow("GST (18% on platform commission)", "₹${gst.toStringAsFixed(2)}"),
-                          const Divider(),
-                          _buildPriceRow("Total Amount", "₹${total.toStringAsFixed(2)}", isBold: true),
-                          if (!_payOnline) ...[
-                            const Divider(),
-                            _buildPriceRow("Payable Now (30%)", "₹${deposit.toStringAsFixed(2)}", color: const Color(0xFF10B981), isBold: true),
-                            _buildPriceRow("Pay at Venue (70%)", "₹${outstanding.toStringAsFixed(2)}", color: Colors.amber),
-                          ]
+                          Icon(
+                            _payOnline ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                            color: _payOnline ? AppColors.pink : subtextCol,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("Pay Online (Full Amount)", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14)),
+                                const SizedBox(height: 2),
+                                Text("Pay now and enjoy your game", style: GoogleFonts.sora(color: subtextCol, fontSize: 12)),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(height: 32),
-                  ElevatedButton(
-                    onPressed: _processPayment,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  GestureDetector(
+                    onTap: () => setState(() => _payOnline = false),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: !_payOnline ? AppColors.pink.withOpacity(0.08) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: !_payOnline ? AppColors.pink.withOpacity(0.3) : borderCol),
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Icon(
+                            !_payOnline ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                            color: !_payOnline ? AppColors.pink : subtextCol,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("Pay at Venue (Split Deposit)", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14)),
+                                const SizedBox(height: 2),
+                                Text("Pay 30% online now & 70% cash at court", style: GoogleFonts.sora(color: subtextCol, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Text(
-                      _payOnline ? "Proceed to Pay: ₹${total.toStringAsFixed(2)}" : "Proceed with Deposit: ₹${deposit.toStringAsFixed(2)}",
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  const SizedBox(height: 28),
+
+                  // Detailed price breakdown
+                  GlassContainer(
+                    radius: 20,
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        _buildPriceRow("Slot Price", "₹${price.toStringAsFixed(2)}", textCol),
+                        if (_discount > 0) _buildPriceRow("Discount Applied", "-₹${_discount.toStringAsFixed(2)}", Colors.green),
+                        _buildPriceRow("Convenience Fee (4%)", "₹${convenience.toStringAsFixed(2)}", textCol),
+                        _buildPriceRow("GST (18% on commission)", "₹${gst.toStringAsFixed(2)}", textCol),
+                        const Divider(height: 24),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text("Total Amount", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 15)),
+                            Text("₹${total.toStringAsFixed(2)}", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: AppColors.pink, fontSize: 16)),
+                          ],
+                        ),
+                        if (!_payOnline) ...[
+                          const Divider(height: 24),
+                          _buildPriceRow("Payable Now (30%)", "₹${deposit.toStringAsFixed(2)}", Colors.green),
+                          _buildPriceRow("Pay at Venue (70%)", "₹${outstanding.toStringAsFixed(2)}", Colors.amber),
+                        ]
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 36),
+
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: AppColors.brandGradient,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: ElevatedButton(
+                      onPressed: _processPayment,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                      child: Text(
+                        _payOnline ? "Proceed to Pay: ₹${total.toStringAsFixed(2)}" : "Proceed with Deposit: ₹${deposit.toStringAsFixed(2)}",
+                        style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
                     ),
                   )
                 ],
@@ -1409,14 +1847,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Widget _buildPriceRow(String label, String value, {Color? color, bool isBold = false}) {
+  Widget _buildPriceRow(String label, String value, Color color) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: TextStyle(fontWeight: isBold ? FontWeight.bold : FontWeight.normal, color: color)),
-          Text(value, style: TextStyle(fontWeight: isBold ? FontWeight.bold : FontWeight.normal, color: color)),
+          Text(label, style: GoogleFonts.sora(fontSize: 13, color: Colors.grey)),
+          Text(value, style: GoogleFonts.sora(fontSize: 13, color: color, fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -1432,81 +1870,157 @@ class ConfirmationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+
     return Scaffold(
+      backgroundColor: context.bgCol,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Icon(Icons.check_circle_outline, size: 90, color: Color(0xFF10B981)),
-              const SizedBox(height: 16),
-              const Text("Booking Confirmed!", textAlign: TextAlign.center, style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 20),
+              // Large animated-like success icon
+              Center(
+                child: Container(
+                  width: 90,
+                  height: 90,
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.green.withOpacity(0.3), width: 2),
+                  ),
+                  child: const Icon(Icons.check_circle_outline_rounded, size: 54, color: Colors.green),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                "Booking Confirmed!",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.sora(fontSize: 26, fontWeight: FontWeight.bold, color: textCol),
+              ),
               const SizedBox(height: 8),
-              const Text("Your slot is locked and confirmed.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+              Text(
+                "Your slot is locked and confirmed.",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.sora(color: subtextCol, fontSize: 14),
+              ),
               const SizedBox(height: 32),
-              // E-Ticket Card
-              Card(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    children: [
-                      Text(booking['eticket_code'] ?? 'APV-2026-XXXXXX', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1)),
-                      const SizedBox(height: 16),
-                      // QR Code
-                      QrImageView(
+
+              // Glass Ticket Card
+              GlassContainer(
+                radius: 24,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      booking['eticket_code'] ?? 'APV-2026-XXXXXX',
+                      style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1, color: textCol),
+                    ),
+                    const SizedBox(height: 20),
+                    // QR Code
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: QrImageView(
                         data: booking['eticket_code'] ?? '',
                         version: QrVersions.auto,
                         size: 160.0,
                         backgroundColor: Colors.white,
                       ),
-                      const SizedBox(height: 16),
-                      const Text("Show this QR at the venue for check-in", style: TextStyle(color: Colors.grey, fontSize: 13)),
-                      const Divider(height: 32),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Show this QR at the venue for check-in",
+                      style: GoogleFonts.sora(color: Colors.grey, fontSize: 12),
+                    ),
+                    const Divider(height: 36),
+                    _buildTicketRow("Venue", booking['venue']?['name'] ?? 'Sports Turf', textCol, subtextCol),
+                    _buildTicketRow("Sport", booking['venue']?['sport_type'] ?? 'Football', textCol, subtextCol),
+                    _buildTicketRow("Date & Time", "${booking['slot']?['start_time']} - ${booking['slot']?['end_time']}", textCol, subtextCol),
+                    _buildTicketRow("Status", "CONFIRMED", Colors.green, subtextCol),
+                    const Divider(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("Online Paid", style: GoogleFonts.sora(color: subtextCol, fontSize: 13)),
+                        Text("₹${booking['online_amount']}", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 15)),
+                      ],
+                    ),
+                    if (double.parse((booking['venue_amount'] ?? 0).toString()) > 0) ...[
+                      const SizedBox(height: 8),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text("Online Paid"),
-                          Text("₹${booking['online_amount']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF10B981))),
+                          Text("Pay at Venue", style: GoogleFonts.sora(color: subtextCol, fontSize: 13)),
+                          Text("₹${booking['venue_amount']}", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 15)),
                         ],
                       ),
-                      if (double.parse(booking['venue_amount'].toString()) > 0) ...[
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text("Pay at Venue"),
-                            Text("₹${booking['venue_amount']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber)),
-                          ],
-                        ),
-                      ]
-                    ],
-                  ),
+                    ]
+                  ],
                 ),
               ),
               const SizedBox(height: 40),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (context) => SplashScreen(toggleTheme: () {})),
-                    (route) => false,
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF10B981),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+
+              // Actions
+              Container(
+                decoration: BoxDecoration(
+                  gradient: AppColors.brandGradient,
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                child: const Text("Back to Home", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              )
+                child: ElevatedButton(
+                  onPressed: () {
+                    // Navigate back to the home dashboard (first screen)
+                    Navigator.of(context).popUntil((route) => route.isFirst);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.transparent,
+                    shadowColor: Colors.transparent,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  child: Text(
+                    "Back to Home",
+                    style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
       ),
     );
   }
+
+  Widget _buildTicketRow(String label, String value, Color valueCol, Color labelCol) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: GoogleFonts.sora(color: labelCol, fontSize: 12)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: GoogleFonts.sora(color: valueCol, fontSize: 13, fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
 
 // -------------------------------------------------------------
 // Bookings Tab
@@ -1818,38 +2332,150 @@ class _CouponsTabState extends State<CouponsTab> {
   void _loadCoupons() async {
     setState(() => _isLoading = true);
     final res = await ApiService.getCoupons();
-    setState(() {
-      _coupons = res['data'] ?? [];
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _coupons = res['data'] ?? [];
+        _isLoading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+
     return Scaffold(
-      appBar: AppBar(title: const Text("My Coupons")),
+      backgroundColor: context.bgCol,
+      appBar: AppBar(
+        title: Text("My Coupons", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+      ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF10B981)))
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : _coupons.isEmpty
-              ? const Center(child: Text("Your wallet has no coupon codes right now."))
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 100,
+                          height: 100,
+                          decoration: BoxDecoration(
+                            color: AppColors.pink.withOpacity(0.08),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.confirmation_num_outlined, size: 48, color: AppColors.pink),
+                        ),
+                        const SizedBox(height: 24),
+                        Text(
+                          "No coupons available",
+                          style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: textCol),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Check back later for exclusive deals & discounts",
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.sora(fontSize: 13, color: subtextCol),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
               : ListView.builder(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   itemCount: _coupons.length,
                   itemBuilder: (context, index) {
                     final item = _coupons[index];
-                    return Card(
+                    final code = item['code'] ?? 'SUMMER20';
+                    final discount = "${item['discount_value'] ?? '20'}%";
+
+                    return Container(
                       margin: const EdgeInsets.only(bottom: 16),
-                      child: ListTile(
-                        leading: const CircleAvatar(
-                          backgroundColor: Color(0xFF10B981),
-                          child: Icon(Icons.percent, color: Colors.white),
-                        ),
-                        title: Text(item['code'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text("Get ${item['discount_value']}% OFF on slot bookings"),
-                        trailing: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(border: Border.all(color: const Color(0xFF10B981)), borderRadius: BorderRadius.circular(4)),
-                          child: const Text("ACTIVE", style: TextStyle(color: Color(0xFF10B981), fontSize: 11, fontWeight: FontWeight.bold)),
+                      child: GlassContainer(
+                        radius: 20,
+                        padding: const EdgeInsets.all(20),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Left Icon Indicator
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: AppColors.pink.withOpacity(0.12),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.percent_rounded, color: AppColors.pink, size: 22),
+                            ),
+                            const SizedBox(width: 16),
+                            // Details
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        "$discount OFF",
+                                        style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.pink),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.pink.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          "ACTIVE",
+                                          style: GoogleFonts.sora(color: AppColors.pink, fontSize: 10, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    code,
+                                    style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 0.5, color: textCol),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    "Save $discount on your next booking",
+                                    style: GoogleFonts.sora(fontSize: 12, color: subtextCol),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    "Valid until 30 July 2026",
+                                    style: GoogleFonts.sora(fontSize: 11, color: Colors.grey),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  // Copy button
+                                  OutlinedButton.icon(
+                                    onPressed: () {
+                                      Clipboard.setData(ClipboardData(text: code));
+                                      AppToast.show(context, "Coupon code copied: $code");
+                                    },
+                                    icon: const Icon(Icons.copy_rounded, size: 14, color: AppColors.pink),
+                                    label: Text(
+                                      "Copy Code",
+                                      style: GoogleFonts.sora(fontSize: 12, color: AppColors.pink, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: AppColors.pink, width: 0.8),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    ),
+                                  )
+                                ],
+                              ),
+                            )
+                          ],
                         ),
                       ),
                     );
@@ -1955,88 +2581,95 @@ class _ProfileTabState extends State<ProfileTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. Profile Header (Hero Section)
+            // 1. Profile Header (Compact Premium Hero Section)
             Container(
               decoration: BoxDecoration(
                 gradient: AppColors.brandGradient,
                 borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(32),
-                  bottomRight: Radius.circular(32),
+                  bottomLeft: Radius.circular(24),
+                  bottomRight: Radius.circular(24),
                 ),
               ),
-              padding: const EdgeInsets.fromLTRB(24, 60, 24, 32),
+              padding: const EdgeInsets.fromLTRB(20, 48, 20, 20),
               child: Column(
                 children: [
                   const CircleAvatar(
-                    radius: 46,
+                    radius: 36,
                     backgroundColor: Colors.white24,
                     child: CircleAvatar(
-                      radius: 42,
+                      radius: 33,
                       backgroundColor: Colors.white,
-                      child: Icon(Icons.person, size: 48, color: AppColors.pink),
+                      child: Icon(Icons.person, size: 38, color: AppColors.pink),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Text(
                     _profile['name'] ?? 'Athlete User',
-                    style: GoogleFonts.sora(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: GoogleFonts.sora(fontSize: 30, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
                     "@athlete_user",
-                    style: GoogleFonts.sora(fontSize: 14, color: Colors.white70),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        "Player ID: ${pId.substring(0, 8)}...",
-                        style: GoogleFonts.sora(fontSize: 12, color: Colors.white70),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy, size: 14, color: Colors.white70),
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: pId));
-                          AppToast.show(context, "Player ID copied to clipboard!");
-                        },
-                      ),
-                    ],
+                    style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.white70),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.location_on, size: 14, color: Colors.white70),
+                      Text(
+                        "Player ID: ${pId.substring(0, 8)}...",
+                        style: GoogleFonts.sora(fontSize: 14, color: Colors.white70),
+                      ),
                       const SizedBox(width: 4),
-                      Text("Ahmedabad, Gujarat", style: GoogleFonts.sora(fontSize: 12, color: Colors.white70)),
+                      GestureDetector(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: pId));
+                          AppToast.show(context, "Player ID copied to clipboard!");
+                        },
+                        child: const Icon(Icons.copy, size: 14, color: Colors.white70),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  Text("Member since Jan 2025", style: GoogleFonts.sora(fontSize: 11, color: Colors.white54)),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      "⭐ Level 5 Player",
-                      style: GoogleFonts.sora(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.location_on, size: 14, color: Colors.white70),
+                      const SizedBox(width: 4),
+                      Text("Ahmedabad, Gujarat", style: GoogleFonts.sora(fontSize: 15, color: Colors.white70)),
+                    ],
                   ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () {
-                      AppToast.show(context, "Edit profile screen coming soon!");
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white24,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: Text("Edit Profile", style: GoogleFonts.sora(color: Colors.white)),
+                  const SizedBox(height: 4),
+                  Text("Member since Jan 2025", style: GoogleFonts.sora(fontSize: 13, color: Colors.white54)),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          "⭐ Level 5 Player",
+                          style: GoogleFonts.sora(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton(
+                        onPressed: () {
+                          AppToast.show(context, "Edit profile screen coming soon!");
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white.withOpacity(0.15),
+                          elevation: 0,
+                          fixedSize: const Size(130, 36),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        ),
+                        child: Text("Edit Profile", style: GoogleFonts.sora(color: Colors.white, fontSize: 13)),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -2053,10 +2686,10 @@ class _ProfileTabState extends State<ProfileTab> {
                     color: cardBg,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: borderCol)),
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(16),
                       child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+                        spacing: 10,
+                        runSpacing: 10,
                         children: [
                           _buildSportChip("⚽ Football"),
                           _buildSportChip("🏏 Cricket"),
@@ -2404,26 +3037,56 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Widget _buildSportChip(String sport) {
-    final isSelected = _selectedSports.contains(sport.substring(2).trim());
-    return FilterChip(
-      label: Text(sport, style: GoogleFonts.sora(fontSize: 12, color: isSelected ? Colors.white : Colors.grey)),
-      selected: isSelected,
-      selectedColor: AppColors.pink,
-      backgroundColor: Colors.transparent,
-      checkmarkColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.grey, width: 0.5)),
-      onSelected: (selected) {
+    final name = sport.substring(2).trim();
+    final isSelected = _selectedSports.contains(name);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return GestureDetector(
+      onTap: () {
         setState(() {
-          final name = sport.substring(2).trim();
-          if (selected) {
-            _selectedSports.add(name);
-          } else {
+          if (isSelected) {
             _selectedSports.remove(name);
+          } else {
+            _selectedSports.add(name);
           }
         });
       },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          gradient: isSelected ? AppColors.brandGradient : null,
+          color: isSelected ? null : (isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04)),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: isSelected ? Colors.transparent : (isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.08)),
+          ),
+          boxShadow: isSelected
+              ? [BoxShadow(color: AppColors.pink.withOpacity(0.3), blurRadius: 6, offset: const Offset(0, 3))]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isSelected) ...[
+              const Icon(Icons.check_rounded, color: Colors.white, size: 14),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              sport,
+              style: GoogleFonts.sora(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
+
 
   Widget _buildStatRow(Color textCol, Color subtextCol, String label, String value) {
     return Padding(
