@@ -8,8 +8,8 @@ export class ClientController {
   // 1. Auth Handlers
   public static async requestOtp(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { phoneNumber } = req.body;
-      const data = await ClientService.requestOtp(phoneNumber);
+      const { phoneNumber, password, isSignUp, role } = req.body;
+      const data = await ClientService.requestOtp(phoneNumber, password, isSignUp, role || 'partner');
       res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
@@ -20,6 +20,16 @@ export class ClientController {
     try {
       const { phoneNumber, otp, role } = req.body;
       const data = await ClientService.verifyOtp(phoneNumber, otp, role || 'user');
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async googleLogin(req: any, res: Response, next: NextFunction) {
+    try {
+      const { email, name, role } = req.body;
+      const data = await ClientService.googleLogin(email, name, role || 'partner');
       res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
@@ -43,6 +53,17 @@ export class ClientController {
       const id = req.user?.id;
       const role = req.user?.role;
       const data = await ClientService.updateProfile(id!, req.body, role!);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async deleteProfile(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const id = req.user?.id;
+      const role = req.user?.role;
+      const data = await ClientService.deleteProfile(id!, role!);
       res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
@@ -151,6 +172,27 @@ export class ClientController {
     try {
       const { bookingId, razorpayOrderId, razorpayPaymentId } = req.body;
       const data = await ClientService.verifyPayment(bookingId, razorpayOrderId, razorpayPaymentId);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async initiateWalletPayment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { amount } = req.body;
+      const data = await ClientService.initiateWalletPayment(amount);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async verifyWalletPayment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.id;
+      const { razorpayOrderId, razorpayPaymentId, amount } = req.body;
+      const data = await ClientService.verifyWalletPayment(userId!, razorpayOrderId, razorpayPaymentId, amount);
       res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
@@ -279,9 +321,21 @@ export class ClientController {
   public static async bulkGenerateSlots(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { venueId } = req.params;
-      const { date, startTime, endTime, price, durationMinutes } = req.body;
-      const data = await ClientService.bulkGenerateSlots(venueId, date, startTime, endTime, Number(price), Number(durationMinutes));
+      const { date, dates, startTime, endTime, price, durationMinutes } = req.body;
+      const targetDates = Array.isArray(dates) ? dates : (date ? [date] : []);
+      const data = await ClientService.bulkGenerateSlots(venueId, targetDates, startTime, endTime, Number(price), Number(durationMinutes));
       res.status(201).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async bulkDeleteSlots(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { venueId } = req.params;
+      const { slotIds } = req.body;
+      const data = await ClientService.bulkDeleteSlots(venueId, slotIds || []);
+      res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
     }
@@ -371,8 +425,8 @@ export class ClientController {
   public static async submitPartnerKyc(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const partnerId = req.user?.id;
-      const { documentType, fileUrl } = req.body;
-      const data = await ClientService.submitPartnerKyc(partnerId!, documentType, fileUrl);
+      const { documentType, fileUrl, gstNumber, panNumber, aadhaarNumber } = req.body;
+      const data = await ClientService.submitPartnerKyc(partnerId!, documentType, fileUrl, gstNumber, panNumber, aadhaarNumber);
       res.status(201).json({ success: true, data });
     } catch (err) {
       next(err);
@@ -471,7 +525,60 @@ export class ClientController {
         success: true,
         data: {
           supportPhone: settings.supportPhone || "9427961426",
-          supportEmail: settings.supportEmail
+          supportWhatsapp: settings.supportWhatsapp || "9427961426",
+          supportEmail: settings.supportEmail || "support@athletepov.com",
+          partnerAppVersion: settings.partnerAppVersion || "1.0.24",
+          playerAppVersion: settings.playerAppVersion || "1.0.12",
+          privacyPolicyUrl: settings.privacyPolicyUrl || "https://athletepov.com/privacy-policy",
+          termsOfServiceUrl: settings.termsOfServiceUrl || "https://athletepov.com/terms-of-service",
+          playStoreUrl: settings.playStoreUrl || "https://play.google.com/store/apps/details?id=com.athletepov.partner",
+          appStoreUrl: settings.appStoreUrl || "https://apps.apple.com/app/athletepov-partner/id123456789"
+        }
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async reportProblem(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.id;
+      const { title, description } = req.body;
+      const data = await ClientService.reportProblem(userId!, title, description);
+      res.status(201).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async uploadFile(req: any, res: Response, next: NextFunction) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: { message: "No file uploaded" } });
+      }
+
+      const settings = await AdminService.getSettings();
+      const provider = settings.storageProvider || 'local';
+
+      let fileUrl = '';
+      if (provider === 'local') {
+        fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      } else if (provider === 's3') {
+        // Fallback to local storage for now
+        fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      } else if (provider === 'drive') {
+        // Fallback to local storage for now
+        fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      } else {
+        fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          url: fileUrl,
+          filename: req.file.filename,
+          provider
         }
       });
     } catch (err) {

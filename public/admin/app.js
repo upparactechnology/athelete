@@ -19,6 +19,7 @@ let editingCouponId = null;
 
 // User table sorting & multi-selection state
 let loadedUsers = [];
+let loadedPartners = [];
 let loadedVenues = [];
 let userSortField = '';
 let userSortAsc = true;
@@ -364,6 +365,7 @@ async function loadPartnersData() {
     try {
         // Load All Partners
         const partners = await apiCall('/api/admin/partners');
+        loadedPartners = partners;
         const tbody = document.querySelector('#partnersTable tbody');
         tbody.innerHTML = '';
 
@@ -376,21 +378,35 @@ async function loadPartnersData() {
                 if (p.kyc_status === 'verified') kycBadgeClass = 'success';
                 if (p.kyc_status === 'pending') kycBadgeClass = 'pending';
                 if (p.kyc_status === 'rejected') kycBadgeClass = 'danger';
+                if (p.kyc_status === 'deleted') kycBadgeClass = 'danger';
 
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td><code>${p.partner_id.substring(0, 8)}</code></td>
-                    <td>${p.phone_number}</td>
-                    <td><span class="badge ${kycBadgeClass}">${p.kyc_status}</span></td>
-                    <td><span class="badge neutral">${p.plan_tier}</span></td>
-                    <td>₹${Number(p.total_earnings).toFixed(2)}</td>
-                    <td>${date}</td>
-                    <td>
+                const displayPhone = p.kyc_status === 'deleted' ? 'Not Available (Deleted)' : p.phone_number;
+                const actionsHtml = p.kyc_status === 'deleted'
+                    ? `<span class="text-muted small">Account Deleted</span>`
+                    : `
                         <div style="display: flex; gap: 5px;">
                             <button class="btn-action text-secondary" onclick="openPartnerEditModal('${p.partner_id}', '${escapeHtml(p.phone_number)}', '${p.kyc_status}', '${p.plan_tier}', ${Number(p.total_earnings)})">Edit</button>
                             <button class="btn-action text-danger" onclick="deletePartner('${p.partner_id}')">Delete</button>
                         </div>
-                    </td>
+                    `;
+
+                const row = document.createElement('tr');
+                row.className = 'partner-row';
+                row.style.cursor = 'pointer';
+                row.addEventListener('click', (e) => {
+                    if (!e.target.closest('.btn-action')) {
+                        openPartnerDrawer(p);
+                    }
+                });
+
+                row.innerHTML = `
+                    <td><code>${p.partner_id.substring(0, 8)}</code></td>
+                    <td>${displayPhone}</td>
+                    <td><span class="badge ${kycBadgeClass}">${p.kyc_status}</span></td>
+                    <td><span class="badge neutral">${p.plan_tier}</span></td>
+                    <td>₹${Number(p.total_earnings).toFixed(2)}</td>
+                    <td>${date}</td>
+                    <td>${actionsHtml}</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -407,10 +423,17 @@ async function loadPartnersData() {
         }
 
         kycDocs.forEach(d => {
+            const hostDisplay = `
+                <div>
+                    <strong>ID:</strong> <code>${d.partner_id.substring(0, 8)}</code><br>
+                    <strong>Email:</strong> <small>${d.partner?.email || '-'}</small><br>
+                    <strong>Phone:</strong> <small>${d.partner?.phone_number || '-'}</small>
+                </div>
+            `;
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td><code>${d.doc_id.substring(0, 8)}</code></td>
-                <td><code>${d.partner_id.substring(0, 8)}</code> (${d.partner.phone_number})</td>
+                <td>${hostDisplay}</td>
                 <td><strong>${d.document_type.toUpperCase().replace('_', ' ')}</strong></td>
                 <td><span class="badge pending">${d.status}</span></td>
                 <td>
@@ -430,6 +453,35 @@ function openKycInspection(docId, fileUrl) {
     document.getElementById('kycDocUrl').textContent = fileUrl;
     document.getElementById('kycDocLink').href = fileUrl;
     document.getElementById('kycRejectionNote').value = '';
+
+    const img = document.getElementById('kycDocPreviewImg');
+    const pdf = document.getElementById('kycDocPreviewPdf');
+    const placeholder = document.getElementById('kycDocPreviewPlaceholder');
+
+    img.style.display = 'none';
+    pdf.style.display = 'none';
+    placeholder.style.display = 'none';
+
+    let displayUrl = fileUrl;
+    if (fileUrl && fileUrl.includes('/uploads/')) {
+        const index = fileUrl.indexOf('/uploads/');
+        displayUrl = fileUrl.substring(index);
+    }
+
+    if (displayUrl) {
+        const lowerUrl = displayUrl.toLowerCase();
+        if (lowerUrl.endsWith('.pdf')) {
+            pdf.src = displayUrl;
+            pdf.style.display = 'block';
+        } else if (lowerUrl.endsWith('.jpg') || lowerUrl.endsWith('.jpeg') || lowerUrl.endsWith('.png') || lowerUrl.endsWith('.webp') || lowerUrl.endsWith('.gif')) {
+            img.src = displayUrl;
+            img.style.display = 'block';
+        } else {
+            placeholder.style.display = 'block';
+        }
+    } else {
+        placeholder.style.display = 'block';
+    }
     
     openModal('kycModal');
 }
@@ -988,6 +1040,26 @@ function closeModal(modalId) {
     }
 }
 
+// Global keydown event for Escape key to close active modals & drawers
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const activeModal = document.querySelector('.modal-overlay.active');
+        if (activeModal) {
+            closeModal(activeModal.id);
+        }
+        
+        const userDrawer = document.getElementById('userDetailDrawer');
+        if (userDrawer && userDrawer.classList.contains('active')) {
+            closeUserDrawer();
+        }
+        
+        const partnerDrawer = document.getElementById('partnerDetailDrawer');
+        if (partnerDrawer && partnerDrawer.classList.contains('active')) {
+            closePartnerDrawer();
+        }
+    }
+});
+
 // Theme toggler
 function toggleTheme() {
     const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -1187,6 +1259,7 @@ function renderUsersTable(users) {
         let badgeClass = 'success';
         if (u.status === 'Inactive') badgeClass = 'neutral';
         if (u.status === 'Blocked') badgeClass = 'danger';
+        if (u.status === 'Deleted') badgeClass = 'danger';
 
         const row = document.createElement('tr');
         row.className = 'user-row';
@@ -1200,6 +1273,17 @@ function renderUsersTable(users) {
             }
         });
 
+        const displayPhone = u.status === 'Deleted' ? 'Not Available (Deleted)' : u.phone_number;
+        const displayEmail = u.status === 'Deleted' ? '-' : (u.email || '-');
+        const actionsHtml = u.status === 'Deleted'
+            ? `<span class="text-muted small">Account Deleted</span>`
+            : `
+                <div style="display: flex; gap: 5px;">
+                    <button class="btn-action text-secondary" onclick="openUserEditModal('${u.user_id}', '${escapeHtml(u.name || '')}', '${escapeHtml(u.email || '')}', '${escapeHtml(u.phone_number)}', '${u.status}')">Edit</button>
+                    <button class="btn-action text-danger" onclick="deleteUser('${u.user_id}')">Delete</button>
+                </div>
+            `;
+
         row.innerHTML = `
             <td style="padding: 10px 14px;"><input type="checkbox" class="user-checkbox" value="${u.user_id}" ${isChecked} onchange="toggleSelectUser('${u.user_id}', this.checked)"></td>
             <td>
@@ -1209,17 +1293,12 @@ function renderUsersTable(users) {
                 </div>
             </td>
             <td><code>${u.user_id.substring(0, 8)}</code></td>
-            <td>${u.phone_number}</td>
-            <td>${u.email || '-'}</td>
+            <td>${displayPhone}</td>
+            <td>${displayEmail}</td>
             <td class="text-right">${u.total_bookings}</td>
             <td class="text-right">₹${Number(u.total_spend).toFixed(2)}</td>
             <td><span class="badge ${badgeClass}">${u.status}</span></td>
-            <td>
-                <div style="display: flex; gap: 5px;">
-                    <button class="btn-action text-secondary" onclick="openUserEditModal('${u.user_id}', '${escapeHtml(u.name || '')}', '${escapeHtml(u.email || '')}', '${escapeHtml(u.phone_number)}', '${u.status}')">Edit</button>
-                    <button class="btn-action text-danger" onclick="deleteUser('${u.user_id}')">Delete</button>
-                </div>
-            </td>
+            <td>${actionsHtml}</td>
         `;
         tbody.appendChild(row);
     });
@@ -1334,10 +1413,10 @@ function openUserDrawer(user) {
                 <div class="detail-value"><code>${user.user_id}</code></div>
                 
                 <div class="detail-label">Phone</div>
-                <div class="detail-value">${user.phone_number}</div>
+                <div class="detail-value">${user.status === 'Deleted' ? 'Not Available' : user.phone_number}</div>
                 
                 <div class="detail-label">Email</div>
-                <div class="detail-value">${user.email || '-'}</div>
+                <div class="detail-value">${user.status === 'Deleted' ? 'Not Available' : (user.email || '-')}</div>
                 
                 <div class="detail-label">Joined On</div>
                 <div class="detail-value">${joinDate}</div>
@@ -1368,6 +1447,254 @@ function closeUserDrawer() {
     document.getElementById('userDrawerBackdrop').classList.remove('active');
     document.getElementById('userDetailDrawer').classList.remove('active');
     currentInspectedUser = null;
+}
+
+let currentInspectedPartner = null;
+
+function openPartnerDrawer(partner) {
+    currentInspectedPartner = partner;
+    
+    let statusClass = 'success';
+    if (partner.kyc_status === 'pending') statusClass = 'pending';
+    if (partner.kyc_status === 'rejected') statusClass = 'danger';
+    if (partner.kyc_status === 'deleted') statusClass = 'danger';
+    if (partner.kyc_status === 'unverified') statusClass = 'neutral';
+
+    const joinDate = new Date(partner.created_at).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+    });
+
+    const displayPhone = partner.kyc_status === 'deleted' ? 'Not Available' : partner.phone_number;
+    const displayEmail = partner.kyc_status === 'deleted' ? 'Not Available' : (partner.email || '-');
+
+    // 1. Build documents HTML
+    let docsHtml = '';
+    if (partner.partner_documents && partner.partner_documents.length > 0) {
+        docsHtml += `
+            <table class="table-condensed" style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color); text-align: left; font-size: 11px;">
+                        <th style="padding: 6px 0;">Type</th>
+                        <th style="padding: 6px 0;">Status</th>
+                        <th style="padding: 6px 0; text-align: right;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        partner.partner_documents.forEach(doc => {
+            let docStatusBadge = 'neutral';
+            if (doc.status === 'verified') docStatusBadge = 'success';
+            if (doc.status === 'rejected') docStatusBadge = 'danger';
+            
+            docsHtml += `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px;">
+                    <td style="padding: 8px 0; font-weight: 500;">${doc.document_type.toUpperCase().replace('_', ' ')}</td>
+                    <td style="padding: 8px 0;"><span class="badge ${docStatusBadge}">${doc.status}</span></td>
+                    <td style="padding: 8px 0; text-align: right;">
+                        <a href="${doc.file_url}" target="_blank" class="btn-action text-info" style="text-decoration: none;">View File</a>
+                    </td>
+                </tr>
+            `;
+        });
+        docsHtml += `</tbody></table>`;
+    } else {
+        docsHtml = `<div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">No files uploaded yet.</div>`;
+    }
+
+    // 2. Build venues HTML
+    let venuesHtml = '';
+    if (partner.venues && partner.venues.length > 0) {
+        venuesHtml += `
+            <table class="table-condensed" style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color); text-align: left; font-size: 11px;">
+                        <th style="padding: 6px 0;">Venue Name</th>
+                        <th style="padding: 6px 0;">Sports</th>
+                        <th style="padding: 6px 0;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        partner.venues.forEach(v => {
+            let vBadge = 'neutral';
+            if (v.status === 'listed') vBadge = 'success';
+            if (v.status === 'suspended') vBadge = 'danger';
+            if (v.status === 'unlisted') vBadge = 'pending';
+            
+            venuesHtml += `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px;">
+                    <td style="padding: 8px 0; font-weight: 600;">${v.name}</td>
+                    <td style="padding: 8px 0; font-size: 11px;">${v.sport_types.join(', ')}</td>
+                    <td style="padding: 8px 0;"><span class="badge ${vBadge}">${v.status}</span></td>
+                </tr>
+            `;
+        });
+        venuesHtml += `</tbody></table>`;
+    } else {
+        venuesHtml = `<div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">No venues registered yet.</div>`;
+    }
+
+    // 3. Build settlements HTML
+    let settlementsHtml = '';
+    if (partner.settlements && partner.settlements.length > 0) {
+        settlementsHtml += `
+            <table class="table-condensed" style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color); text-align: left; font-size: 11px;">
+                        <th style="padding: 6px 0;">Period</th>
+                        <th style="padding: 6px 0;">Net Amount</th>
+                        <th style="padding: 6px 0;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        partner.settlements.forEach(s => {
+            const start = new Date(s.period_start).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+            const end = new Date(s.period_end).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+            let sBadge = 'neutral';
+            if (s.status === 'settled') sBadge = 'success';
+            if (s.status === 'pending') sBadge = 'pending';
+            if (s.status === 'failed') sBadge = 'danger';
+            
+            settlementsHtml += `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px;">
+                    <td style="padding: 8px 0;">${start} - ${end}</td>
+                    <td style="padding: 8px 0; font-weight: 600;">₹${Number(s.net_amount).toFixed(2)}</td>
+                    <td style="padding: 8px 0;"><span class="badge ${sBadge}">${s.status}</span></td>
+                </tr>
+            `;
+        });
+        settlementsHtml += `</tbody></table>`;
+    } else {
+        settlementsHtml = `<div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">No settlements history.</div>`;
+    }
+
+    const drawerBody = document.getElementById('partnerDrawerBody');
+    const avatarContent = partner.avatar_url 
+        ? `<img src="${getRelativeUploadUrl(partner.avatar_url)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`
+        : (partner.plan_tier === 'premium' ? '👑' : '🏢');
+
+    drawerBody.innerHTML = `
+        <div class="drawer-user-header" style="text-align: center; margin-bottom: 20px;">
+            <div class="drawer-avatar-large" style="width: 70px; height: 70px; border-radius: 50%; background: var(--bg-accent); display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 10px; color: var(--text-primary); border: 2px solid var(--border-color); overflow: hidden;">
+                ${avatarContent}
+            </div>
+            <h3 class="drawer-user-name" style="margin: 0; font-size: 18px; font-weight: 600;">Partner Account</h3>
+            <span class="badge ${statusClass}" style="margin-top: 5px; display: inline-block;">KYC: ${partner.kyc_status.toUpperCase()}</span>
+        </div>
+        
+        <div class="drawer-section" style="margin-bottom: 25px;">
+            <h4 style="margin: 0 0 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-primary);">Account Metadata</h4>
+            <div class="drawer-detail-grid" style="display: grid; grid-template-columns: 120px 1fr; row-gap: 8px; font-size: 13px;">
+                <div class="detail-label" style="color: var(--text-muted);">Partner ID</div>
+                <div class="detail-value"><code>${partner.partner_id}</code></div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Phone</div>
+                <div class="detail-value">${displayPhone}</div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Email</div>
+                <div class="detail-value">${displayEmail}</div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Plan Tier</div>
+                <div class="detail-value"><span class="badge neutral">${partner.plan_tier.toUpperCase()}</span></div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Total Earnings</div>
+                <div class="detail-value" style="font-weight: bold; color: var(--success-color);">₹${Number(partner.total_earnings).toFixed(2)}</div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Joined On</div>
+                <div class="detail-value">${joinDate}</div>
+            </div>
+        </div>
+
+        <div class="drawer-section" style="margin-bottom: 25px;">
+            <h4 style="margin: 0 0 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-primary);">Bank Account Details</h4>
+            <div class="drawer-detail-grid" style="display: grid; grid-template-columns: 120px 1fr; row-gap: 8px; font-size: 13px;">
+                <div class="detail-label" style="color: var(--text-muted);">Bank Status</div>
+                <div class="detail-value">
+                    <span class="badge ${partner.bank_status === 'approved' ? 'success' : partner.bank_status === 'pending' ? 'pending' : 'neutral'}">
+                        ${(partner.bank_status || 'unverified').toUpperCase()}
+                    </span>
+                </div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Bank Name</div>
+                <div class="detail-value">${partner.bank_name || 'Not Added'}</div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">Account No</div>
+                <div class="detail-value">${partner.bank_account_no || 'Not Added'}</div>
+                
+                <div class="detail-label" style="color: var(--text-muted);">IFSC Code</div>
+                <div class="detail-value">${partner.bank_ifsc || 'Not Added'}</div>
+            </div>
+            
+            ${partner.bank_status === 'pending' ? `
+                <div style="margin-top: 15px; padding: 12px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 8px;">
+                    <div style="font-weight: 600; font-size: 12px; color: var(--warning-color); margin-bottom: 8px;">PENDING CHANGE REQUEST:</div>
+                    <div class="drawer-detail-grid" style="display: grid; grid-template-columns: 120px 1fr; row-gap: 6px; font-size: 12px; margin-bottom: 10px;">
+                        <div style="color: var(--text-muted);">New Bank Name</div>
+                        <div style="color: var(--text-primary); font-weight: 500;">${partner.temp_bank_name}</div>
+                        <div style="color: var(--text-muted);">New Account No</div>
+                        <div style="color: var(--text-primary); font-weight: 500;">${partner.temp_bank_account_no}</div>
+                        <div style="color: var(--text-muted);">New IFSC Code</div>
+                        <div style="color: var(--text-primary); font-weight: 500;">${partner.temp_bank_ifsc}</div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn-action text-success" onclick="resolveBankChange('${partner.partner_id}', 'approve')" style="flex: 1; padding: 6px; text-align: center; font-weight: bold; background: rgba(16, 185, 129, 0.1);">Approve</button>
+                        <button class="btn-action text-danger" onclick="resolveBankChange('${partner.partner_id}', 'reject')" style="flex: 1; padding: 6px; text-align: center; font-weight: bold; background: rgba(239, 68, 68, 0.1);">Reject</button>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+
+        <div class="drawer-section" style="margin-bottom: 25px;">
+            <h4 style="margin: 0 0 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-primary);">KYC Documents (${partner.partner_documents ? partner.partner_documents.length : 0})</h4>
+            ${docsHtml}
+        </div>
+
+        <div class="drawer-section" style="margin-bottom: 25px;">
+            <h4 style="margin: 0 0 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-primary);">Registered Venues (${partner.venues ? partner.venues.length : 0})</h4>
+            ${venuesHtml}
+        </div>
+
+        <div class="drawer-section" style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-primary);">Settlements History</h4>
+            ${settlementsHtml}
+        </div>
+    `;
+
+    document.getElementById('partnerDrawerBackdrop').classList.add('active');
+    document.getElementById('partnerDetailDrawer').classList.add('active');
+}
+
+function closePartnerDrawer() {
+    document.getElementById('partnerDrawerBackdrop').classList.remove('active');
+    document.getElementById('partnerDetailDrawer').classList.remove('active');
+    currentInspectedPartner = null;
+}
+
+async function resolveBankChange(partnerId, action) {
+    const confirmMsg = action === 'approve' 
+        ? "Are you sure you want to approve these bank account modifications?" 
+        : "Are you sure you want to reject and discard these bank account modifications?";
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const endpoint = `/api/admin/partners/${partnerId}/bank-${action}`;
+        await apiCall(endpoint, 'PATCH');
+        alert(`Bank details successfully ${action === 'approve' ? 'approved' : 'rejected'}.`);
+        
+        // Refresh the partner drawer content
+        await loadPartnersData();
+        const fullPartner = loadedPartners.find(p => p.partner_id === partnerId);
+        if (fullPartner) {
+            openPartnerDrawer(fullPartner);
+        } else {
+            closePartnerDrawer();
+        }
+    } catch (err) {
+        console.error(err);
+    }
 }
 
 // User status PATCH update
@@ -1600,11 +1927,17 @@ async function loadBannersData() {
 
         banners.forEach(b => {
             let badgeClass = b.is_active ? 'success' : 'danger';
+            let imgHtml = '';
+            if (b.image_url && (b.image_url.startsWith('data:image') || b.image_url.startsWith('http') || b.image_url.startsWith('/'))) {
+                imgHtml = `<img src="${getRelativeUploadUrl(b.image_url)}" alt="Banner" style="max-height: 44px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); object-fit: cover; max-width: 120px; display: block;">`;
+            } else {
+                imgHtml = `<code style="font-size: 11px;">${b.image_url ? b.image_url.substring(0, 20) + '...' : ''}</code>`;
+            }
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td><code>${b.banner_id.substring(0, 8)}</code></td>
                 <td><strong>${b.title}</strong></td>
-                <td><code>${b.image_url}</code></td>
+                <td>${imgHtml}</td>
                 <td><span class="badge neutral">${b.target_app}</span></td>
                 <td>${b.display_order}</td>
                 <td><span class="badge ${badgeClass}">${b.is_active ? 'Active' : 'Inactive'}</span></td>
@@ -1666,6 +1999,14 @@ async function loadSettingsData() {
         const settings = await apiCall('/api/admin/settings');
         document.getElementById('settings-platformName').value = settings.platformName || '';
         document.getElementById('settings-supportEmail').value = settings.supportEmail || '';
+        document.getElementById('settings-supportPhone').value = settings.supportPhone || '';
+        document.getElementById('settings-supportWhatsapp').value = settings.supportWhatsapp || '';
+        document.getElementById('settings-privacyPolicyUrl').value = settings.privacyPolicyUrl || '';
+        document.getElementById('settings-termsOfServiceUrl').value = settings.termsOfServiceUrl || '';
+        document.getElementById('settings-playStoreUrl').value = settings.playStoreUrl || '';
+        document.getElementById('settings-appStoreUrl').value = settings.appStoreUrl || '';
+        document.getElementById('settings-firebaseServiceAccount').value = settings.firebaseServiceAccount || '';
+        document.getElementById('settings-useDynamicFcm').checked = !!settings.useDynamicFcm;
         document.getElementById('settings-minWithdrawal').value = settings.minWithdrawal || '';
         document.getElementById('settings-convenienceFee').value = settings.convenienceFee || '';
         
@@ -1682,6 +2023,16 @@ async function loadSettingsData() {
         document.getElementById('settings-smtpFrom').value = settings.smtpFrom || '';
         document.getElementById('settings-useSmtpForOtp').checked = !!settings.useSmtpForOtp;
         document.getElementById('settings-adminApiKey').value = settings.adminApiKey || '';
+        
+        document.getElementById('settings-storageProvider').value = settings.storageProvider || 'local';
+        document.getElementById('settings-awsS3Bucket').value = settings.awsS3Bucket || '';
+        document.getElementById('settings-awsAccessKeyId').value = settings.awsAccessKeyId || '';
+        document.getElementById('settings-awsSecretAccessKey').value = settings.awsSecretAccessKey || '';
+        document.getElementById('settings-awsRegion').value = settings.awsRegion || '';
+        document.getElementById('settings-googleDriveClientId').value = settings.googleDriveClientId || '';
+        document.getElementById('settings-googleDriveClientSecret').value = settings.googleDriveClientSecret || '';
+        document.getElementById('settings-googleDriveFolderId').value = settings.googleDriveFolderId || '';
+        if (typeof toggleStorageProviderFields === 'function') toggleStorageProviderFields();
     } catch (err) {
         console.error(err);
     }
@@ -1691,6 +2042,14 @@ async function saveSettings(e) {
     e.preventDefault();
     const platformName = document.getElementById('settings-platformName').value;
     const supportEmail = document.getElementById('settings-supportEmail').value;
+    const supportPhone = document.getElementById('settings-supportPhone').value;
+    const supportWhatsapp = document.getElementById('settings-supportWhatsapp').value;
+    const privacyPolicyUrl = document.getElementById('settings-privacyPolicyUrl').value;
+    const termsOfServiceUrl = document.getElementById('settings-termsOfServiceUrl').value;
+    const playStoreUrl = document.getElementById('settings-playStoreUrl').value;
+    const appStoreUrl = document.getElementById('settings-appStoreUrl').value;
+    const firebaseServiceAccount = document.getElementById('settings-firebaseServiceAccount').value;
+    const useDynamicFcm = document.getElementById('settings-useDynamicFcm').checked;
     const minWithdrawal = Number(document.getElementById('settings-minWithdrawal').value);
     const convenienceFee = Number(document.getElementById('settings-convenienceFee').value);
     
@@ -1710,10 +2069,27 @@ async function saveSettings(e) {
     
     const adminApiKey = document.getElementById('settings-adminApiKey').value;
 
+    const storageProvider = document.getElementById('settings-storageProvider').value;
+    const awsS3Bucket = document.getElementById('settings-awsS3Bucket').value;
+    const awsAccessKeyId = document.getElementById('settings-awsAccessKeyId').value;
+    const awsSecretAccessKey = document.getElementById('settings-awsSecretAccessKey').value;
+    const awsRegion = document.getElementById('settings-awsRegion').value;
+    const googleDriveClientId = document.getElementById('settings-googleDriveClientId').value;
+    const googleDriveClientSecret = document.getElementById('settings-googleDriveClientSecret').value;
+    const googleDriveFolderId = document.getElementById('settings-googleDriveFolderId').value;
+
     try {
         await apiCall('/api/admin/settings', 'POST', {
             platformName,
             supportEmail,
+            supportPhone,
+            supportWhatsapp,
+            privacyPolicyUrl,
+            termsOfServiceUrl,
+            playStoreUrl,
+            appStoreUrl,
+            firebaseServiceAccount,
+            useDynamicFcm,
             minWithdrawal,
             convenienceFee,
             razorpayKeyId,
@@ -1728,7 +2104,15 @@ async function saveSettings(e) {
             smtpSecure,
             smtpFrom,
             useSmtpForOtp,
-            adminApiKey
+            adminApiKey,
+            storageProvider,
+            awsS3Bucket,
+            awsAccessKeyId,
+            awsSecretAccessKey,
+            awsRegion,
+            googleDriveClientId,
+            googleDriveClientSecret,
+            googleDriveFolderId
         });
         alert("Platform configurations updated successfully.");
         loadSettingsData();
@@ -2043,6 +2427,11 @@ function openBannerCreateModal() {
     document.getElementById('bannerModalTitle').textContent = "Create Banner Placement";
     document.getElementById('bannerForm').reset();
     document.getElementById('banner-id').value = '';
+    
+    // Clear file input and preview
+    document.getElementById('banner-image-file').value = '';
+    document.getElementById('banner-image-preview-container').style.display = 'none';
+    
     openModal('bannerFormModal');
 }
 
@@ -2055,7 +2444,86 @@ function openBannerEditModal(id, title, imageUrl, linkUrl, targetApp, displayOrd
     document.getElementById('banner-target-app').value = targetApp;
     document.getElementById('banner-order').value = displayOrder;
     document.getElementById('banner-active').value = String(isActive);
+    
+    // Clear file input
+    document.getElementById('banner-image-file').value = '';
+    
+    // Set preview if image exists
+    const previewContainer = document.getElementById('banner-image-preview-container');
+    const previewImg = document.getElementById('banner-image-preview');
+    if (imageUrl) {
+        previewImg.src = getRelativeUploadUrl(imageUrl);
+        previewContainer.style.display = 'block';
+    } else {
+        previewContainer.style.display = 'none';
+    }
+    
     openModal('bannerFormModal');
+}
+
+function toggleStorageProviderFields() {
+    const provider = document.getElementById('settings-storageProvider').value;
+    document.getElementById('storage-s3-fields').style.display = provider === 's3' ? 'block' : 'none';
+    document.getElementById('storage-drive-fields').style.display = provider === 'drive' ? 'block' : 'none';
+}
+
+async function apiUpload(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const headers = {
+        'Authorization': `Bearer ${token}`,
+        'X-Admin-Role': 'admin'
+    };
+
+    const response = await fetch('/api/upload', {
+        method: 'POST',
+        headers,
+        body: formData
+    });
+
+    if (response.status === 401 || response.status === 403) {
+        localStorage.clear();
+        window.location.href = 'login.html';
+        return;
+    }
+
+    const json = await response.json();
+    if (!json.success) {
+        throw new Error(json.error?.message || 'Upload failed');
+    }
+    return json.data;
+}
+
+async function handleBannerImageUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    try {
+        const uploadData = await apiUpload(file);
+        const fileUrl = uploadData.url;
+        document.getElementById('banner-image-url').value = fileUrl;
+        
+        // Show preview
+        const previewContainer = document.getElementById('banner-image-preview-container');
+        const previewImg = document.getElementById('banner-image-preview');
+        previewImg.src = getRelativeUploadUrl(fileUrl);
+        previewContainer.style.display = 'block';
+    } catch (err) {
+        console.error("Banner upload failed:", err);
+        alert("Failed to upload image: " + err.message);
+    }
+}
+
+function updateBannerImagePreview(value) {
+    const previewContainer = document.getElementById('banner-image-preview-container');
+    const previewImg = document.getElementById('banner-image-preview');
+    if (value) {
+        previewImg.src = getRelativeUploadUrl(value);
+        previewContainer.style.display = 'block';
+    } else {
+        previewContainer.style.display = 'none';
+    }
 }
 
 async function openDisputeCreateModal() {
@@ -2473,13 +2941,25 @@ async function deleteRole(id) {
 
 // NEW LOADER FUNCTIONS & ACTION HANDLERS
 
+let currentSettingsCache = {};
+
 async function loadMilestonesData() {
     try {
+        const settings = await apiCall('/api/admin/settings');
+        currentSettingsCache = settings;
+        
+        const milestones = settings.milestonesConfig || {
+            first_booking: { count: 1, type: "Welcome", rewardType: "Free Slot", couponCode: "WELCOMEFREE" },
+            bookings_5: { count: 5, type: "Loyalty", rewardType: "Cashback", cashbackAmount: 100 },
+            bookings_10: { count: 10, type: "Power User", rewardType: "Coupon", couponCode: "SUPER20" },
+            bookings_50: { count: 50, type: "Elite Athlete", rewardType: "Coupon", couponCode: "SUPER20" }
+        };
+
         const milestoneList = [
-            { id: 'first_booking', name: 'First Booking Complete', count: 1, type: 'Welcome', rewardType: 'Free Slot' },
-            { id: 'bookings_5', name: '5 Bookings Milestone', count: 5, type: 'Loyalty', rewardType: 'Cashback' },
-            { id: 'bookings_10', name: '10 Bookings Milestone', count: 10, type: 'Power User', rewardType: 'Coupon' },
-            { id: 'bookings_50', name: '50 Bookings Milestone', count: 50, type: 'Elite Athlete', rewardType: 'Coupon' }
+            { id: 'first_booking', name: 'First Booking Complete', count: milestones.first_booking.count, type: milestones.first_booking.type, rewardType: milestones.first_booking.rewardType },
+            { id: 'bookings_5', name: '5 Bookings Milestone', count: milestones.bookings_5.count, type: milestones.bookings_5.type, rewardType: milestones.bookings_5.rewardType },
+            { id: 'bookings_10', name: '10 Bookings Milestone', count: milestones.bookings_10.count, type: milestones.bookings_10.type, rewardType: milestones.bookings_10.rewardType },
+            { id: 'bookings_50', name: '50 Bookings Milestone', count: milestones.bookings_50.count, type: milestones.bookings_50.type, rewardType: milestones.bookings_50.rewardType }
         ];
 
         const tbody = document.querySelector('#milestonesTable tbody');
@@ -2493,7 +2973,7 @@ async function loadMilestonesData() {
                     <td><span class="badge active">${m.type}</span></td>
                     <td>${m.rewardType}</td>
                     <td>
-                        <button class="btn-action text-accent" onclick="alert('Configuring milestone: ${m.name}')">Configure</button>
+                        <button class="btn-action text-accent" onclick="openMilestoneConfigModal('${m.id}', '${m.name}')">Configure</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -2506,37 +2986,171 @@ async function loadMilestonesData() {
 
 async function loadRewardsData() {
     try {
+        const settings = await apiCall('/api/admin/settings');
+        currentSettingsCache = settings;
+
+        const rewards = settings.rewardsConfig || {
+            free_slot: { status: "Active", description: "Applies free booking slot coupon to next booking" },
+            loyalty_points: { status: "Active", description: "Earn 10 points per ₹100 spend on online bookings", pointsPer100: 10 },
+            cashback: { status: "Inactive", description: "10% cashback up to ₹100 inside user wallet", cashbackPercent: 10, maxCashback: 100 }
+        };
+
+        const rewardList = [
+            { id: 'free_slot', name: 'Free Slot Reward', desc: rewards.free_slot.description, status: rewards.free_slot.status },
+            { id: 'loyalty_points', name: 'Loyalty Points Award', desc: rewards.loyalty_points.description, status: rewards.loyalty_points.status },
+            { id: 'cashback', name: 'Cashback Award', desc: rewards.cashback.description, status: rewards.cashback.status }
+        ];
+
         const tbody = document.querySelector('#rewardsTable tbody');
         if (tbody) {
-            tbody.innerHTML = `
-                <tr>
-                    <td><strong>Free Slot Reward</strong></td>
-                    <td>Applies free booking slot coupon to next booking</td>
-                    <td><span class="badge success">Active</span></td>
+            tbody.innerHTML = '';
+            rewardList.forEach(r => {
+                const isSuccess = r.status === 'Active';
+                const badgeClass = isSuccess ? 'badge success' : 'badge neutral';
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><strong>${r.name}</strong></td>
+                    <td>${r.desc}</td>
+                    <td><span class="${badgeClass}">${r.status}</span></td>
                     <td>
-                        <button class="btn-action text-accent" onclick="alert('Configuring Free Slot Reward')">Configure</button>
+                        <button class="btn-action text-accent" onclick="openRewardConfigModal('${r.id}', '${r.name}')">Configure</button>
                     </td>
-                </tr>
-                <tr>
-                    <td><strong>Loyalty Points Award</strong></td>
-                    <td>Earn 10 points per ₹100 spend on online bookings</td>
-                    <td><span class="badge success">Active</span></td>
-                    <td>
-                        <button class="btn-action text-accent" onclick="alert('Configuring Loyalty Points Award')">Configure</button>
-                    </td>
-                </tr>
-                <tr>
-                    <td><strong>Cashback Award</strong></td>
-                    <td>10% cashback up to ₹100 inside user wallet</td>
-                    <td><span class="badge neutral">Inactive</span></td>
-                    <td>
-                        <button class="btn-action text-accent" onclick="alert('Configuring Cashback Award')">Configure</button>
-                    </td>
-                </tr>
-            `;
+                `;
+                tbody.appendChild(row);
+            });
         }
     } catch (err) {
         console.error(err);
+    }
+}
+
+function openMilestoneConfigModal(id, name) {
+    const milestones = currentSettingsCache.milestonesConfig || {
+        first_booking: { count: 1, type: "Welcome", rewardType: "Free Slot", couponCode: "WELCOMEFREE" },
+        bookings_5: { count: 5, type: "Loyalty", rewardType: "Cashback", cashbackAmount: 100 },
+        bookings_10: { count: 10, type: "Power User", rewardType: "Coupon", couponCode: "SUPER20" },
+        bookings_50: { count: 50, type: "Elite Athlete", rewardType: "Coupon", couponCode: "SUPER20" }
+    };
+    const m = milestones[id] || {};
+    
+    document.getElementById('milestone-id').value = id;
+    document.getElementById('milestone-name').value = name;
+    document.getElementById('milestone-count').value = m.count || 1;
+    document.getElementById('milestone-type').value = m.type || '';
+    document.getElementById('milestone-rewardType').value = m.rewardType || 'Free Slot';
+    
+    const couponGroup = document.getElementById('milestone-coupon-group');
+    const couponSelect = document.getElementById('milestone-couponCode');
+    
+    apiCall('/api/admin/coupons').then(res => {
+        const coupons = res || [];
+        couponSelect.innerHTML = '';
+        coupons.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.code;
+            opt.textContent = `${c.code} (${c.discount_value}% OFF)`;
+            if (c.code === m.couponCode) opt.selected = true;
+            couponSelect.appendChild(opt);
+        });
+    }).catch(console.error);
+
+    if (m.rewardType === 'Coupon') {
+        couponGroup.style.display = 'block';
+    } else {
+        couponGroup.style.display = 'none';
+    }
+
+    document.getElementById('milestone-rewardType').onchange = function() {
+        if (this.value === 'Coupon') {
+            couponGroup.style.display = 'block';
+        } else {
+            couponGroup.style.display = 'none';
+        }
+    };
+
+    openModal('milestoneModal');
+}
+
+async function saveMilestoneConfig(event) {
+    event.preventDefault();
+    const id = document.getElementById('milestone-id').value;
+    const count = Number(document.getElementById('milestone-count').value);
+    const type = document.getElementById('milestone-type').value;
+    const rewardType = document.getElementById('milestone-rewardType').value;
+    const couponCode = document.getElementById('milestone-couponCode').value;
+
+    const settings = { ...currentSettingsCache };
+    if (!settings.milestonesConfig) {
+        settings.milestonesConfig = {
+            first_booking: { count: 1, type: "Welcome", rewardType: "Free Slot", couponCode: "WELCOMEFREE" },
+            bookings_5: { count: 5, type: "Loyalty", rewardType: "Cashback", cashbackAmount: 100 },
+            bookings_10: { count: 10, type: "Power User", rewardType: "Coupon", couponCode: "SUPER20" },
+            bookings_50: { count: 50, type: "Elite Athlete", rewardType: "Coupon", couponCode: "SUPER20" }
+        };
+    }
+    
+    settings.milestonesConfig[id] = {
+        count,
+        type,
+        rewardType,
+        couponCode: rewardType === 'Coupon' ? couponCode : (rewardType === 'Free Slot' ? 'WELCOMEFREE' : ''),
+        cashbackAmount: rewardType === 'Cashback' ? 100 : 0
+    };
+
+    try {
+        await apiCall('/api/admin/settings', 'POST', settings);
+        alert('Milestone configuration updated!');
+        closeModal('milestoneModal');
+        loadMilestonesData();
+    } catch (err) {
+        alert(err.message || 'Failed to update milestone');
+    }
+}
+
+function openRewardConfigModal(id, name) {
+    const rewards = currentSettingsCache.rewardsConfig || {
+        free_slot: { status: "Active", description: "Applies free booking slot coupon to next booking" },
+        loyalty_points: { status: "Active", description: "Earn 10 points per ₹100 spend on online bookings", pointsPer100: 10 },
+        cashback: { status: "Inactive", description: "10% cashback up to ₹100 inside user wallet", cashbackPercent: 10, maxCashback: 100 }
+    };
+    const r = rewards[id] || {};
+    
+    document.getElementById('reward-id').value = id;
+    document.getElementById('reward-name').value = name;
+    document.getElementById('reward-desc').value = r.description || '';
+    document.getElementById('reward-status').value = r.status || 'Active';
+    
+    openModal('rewardModal');
+}
+
+async function saveRewardConfig(event) {
+    event.preventDefault();
+    const id = document.getElementById('reward-id').value;
+    const description = document.getElementById('reward-desc').value;
+    const status = document.getElementById('reward-status').value;
+
+    const settings = { ...currentSettingsCache };
+    if (!settings.rewardsConfig) {
+        settings.rewardsConfig = {
+            free_slot: { status: "Active", description: "Applies free booking slot coupon to next booking" },
+            loyalty_points: { status: "Active", description: "Earn 10 points per ₹100 spend on online bookings", pointsPer100: 10 },
+            cashback: { status: "Inactive", description: "10% cashback up to ₹100 inside user wallet", cashbackPercent: 10, maxCashback: 100 }
+        };
+    }
+    
+    settings.rewardsConfig[id] = {
+        ...settings.rewardsConfig[id],
+        description,
+        status
+    };
+
+    try {
+        await apiCall('/api/admin/settings', 'POST', settings);
+        alert('Reward configuration updated!');
+        closeModal('rewardModal');
+        loadRewardsData();
+    } catch (err) {
+        alert(err.message || 'Failed to update reward');
     }
 }
 
@@ -2551,11 +3165,20 @@ async function loadKycData() {
                 return;
             }
             documents.forEach(doc => {
+                const hostDisplay = `
+                    <div>
+                        <strong>ID:</strong> <code>${doc.partner_id.substring(0, 8)}</code><br>
+                        <strong>Email:</strong> <small>${doc.partner?.email || '-'}</small><br>
+                        <strong>Phone:</strong> <small>${doc.partner?.phone_number || '-'}</small>
+                    </div>
+                `;
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><strong>${doc.partner_id.substring(0,8)}...</strong></td>
-                    <td><span class="badge active">${doc.document_type}</span></td>
-                    <td><a href="${doc.file_url}" target="_blank" style="color: var(--accent-primary); text-decoration: underline;">View Document</a></td>
+                    <td>${hostDisplay}</td>
+                    <td><span class="badge active">${doc.document_type.toUpperCase().replace('_', ' ')}</span></td>
+                    <td>
+                        <button class="btn-action text-secondary" onclick="openKycInspection('${doc.doc_id}', '${doc.file_url}')">Inspect File</button>
+                    </td>
                     <td><span class="badge warning">${doc.status}</span></td>
                     <td>
                         <div style="display: flex; gap: 5px;">
@@ -2653,8 +3276,7 @@ function viewVenueDetails(venueId) {
     const imagesHtml = venue.images && venue.images.length > 0
         ? `<div style="display: flex; gap: 10px; overflow-x: auto; padding: 10px 0;">
              ${venue.images.map(img => {
-                 const isLocalPath = img.startsWith('/') || img.startsWith('file://');
-                 const displayUrl = isLocalPath ? img : img;
+                 const displayUrl = getRelativeUploadUrl(img);
                  return `<div style="flex: 0 0 150px; height: 100px; border-radius: 6px; overflow: hidden; background: #222; border: 1px solid #333; position: relative;">
                            <img src="${displayUrl}" onerror="this.src='placeholder.png'; this.onerror=null;" style="width: 100%; height: 100%; object-fit: cover;" />
                            <span style="font-size: 8px; position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: #fff; padding: 2px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${img.split('/').pop()}</span>
@@ -3094,4 +3716,12 @@ function initRealTimeSync() {
         console.error('WebSocket sync error:', err);
         wsConn.close();
     };
+}
+
+function getRelativeUploadUrl(url) {
+    if (url && url.includes('/uploads/')) {
+        const index = url.indexOf('/uploads/');
+        return url.substring(index);
+    }
+    return url;
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
@@ -12,6 +13,12 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'widgets/glass_container.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:webview_flutter/webview_flutter.dart';
 
 // -------------------------------------------------------------
 // Brand Theme & Colors
@@ -176,21 +183,21 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.sports_soccer, size: 80, color: AppColors.pink),
-            SizedBox(height: 20),
-            Text(
+            Image.asset('assets/images/logo.png', width: 96, height: 96),
+            const SizedBox(height: 20),
+            const Text(
               "Partner's POV",
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 1.2),
             ),
-            SizedBox(height: 10),
-            Text("Manage Your Turf Facilities", style: TextStyle(color: Colors.grey, fontSize: 16)),
-            SizedBox(height: 30),
-            CircularProgressIndicator(color: AppColors.pink),
+            const SizedBox(height: 10),
+            const Text("Manage Your Turf Facilities", style: TextStyle(color: Colors.grey, fontSize: 16)),
+            const SizedBox(height: 30),
+            const CircularProgressIndicator(color: AppColors.pink),
           ],
         ),
       ),
@@ -211,30 +218,78 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
+  final _passwordController = TextEditingController();
   final _otpController = TextEditingController();
   bool _otpRequested = false;
   bool _isLoading = false;
+  bool _isSignUp = false;
+  bool _passwordVisible = false;
+  bool _isGoogleSignInInitialized = false;
   String? _receivedOtp;
+  int _resendCountdown = 0;
+  Timer? _countdownTimer;
+
+  void _startResendTimer() {
+    setState(() => _resendCountdown = 30);
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_resendCountdown == 0) {
+        timer.cancel();
+      } else {
+        if (mounted) {
+          setState(() => _resendCountdown--);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    _phoneController.dispose();
+    _passwordController.dispose();
+    _otpController.dispose();
+    super.dispose();
+  }
 
   void _requestOtp() async {
+    FocusScope.of(context).unfocus();
     final email = _phoneController.text.trim();
-    if (email.isEmpty) return;
+    final password = _passwordController.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter an email address')),
+      );
+      return;
+    }
     if (!email.contains('@') || !email.contains('.')) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter a valid email address')),
       );
       return;
     }
+    if (password.isEmpty || password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password must be at least 6 characters long')),
+      );
+      return;
+    }
+
     setState(() {
       _isLoading = true;
       _receivedOtp = null;
     });
     try {
-      final response = await ApiService.requestOtp(email);
+      final response = await ApiService.requestOtp(
+        email, 
+        password: password, 
+        isSignUp: _isSignUp
+      );
       if (response['success'] == true) {
         setState(() {
           _otpRequested = true;
         });
+        _startResendTimer();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(response['data']?['message'] ?? response['message'] ?? 'OTP Sent!')),
         );
@@ -246,7 +301,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       debugPrint("Error requesting OTP: $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error requesting OTP: $e')),
+        SnackBar(content: Text('Error: $e')),
       );
     } finally {
       setState(() => _isLoading = false);
@@ -254,6 +309,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _verifyOtp() async {
+    FocusScope.of(context).unfocus();
     if (_otpController.text.trim().isEmpty) return;
     setState(() => _isLoading = true);
     try {
@@ -293,85 +349,289 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _handleGoogleSignIn() async {
+    setState(() => _isLoading = true);
+    try {
+      if (!_isGoogleSignInInitialized) {
+        await GoogleSignIn.instance.initialize(
+          serverClientId: '239542933796-07n2hl6ehh9sioac43ljhetai1a3jhgu.apps.googleusercontent.com',
+        );
+        _isGoogleSignInInitialized = true;
+      }
+      
+      final GoogleSignInAccount account = await GoogleSignIn.instance.authenticate();
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return Center(
+            child: Card(
+              color: Theme.of(context).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: AppColors.pink),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Connecting with Athlete POV...",
+                      style: TextStyle(
+                        fontSize: 14, 
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+      );
+
+      final response = await ApiService.googleLogin(
+        account.email, 
+        account.displayName ?? 'Google User'
+      );
+      
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      if (response['success'] == true) {
+        if (!mounted) return;
+        final profileRes = await ApiService.getProfile();
+        final profile = profileRes['data'] ?? {};
+        final phoneNumber = profile['phone_number'] ?? '';
+        
+        if (phoneNumber.contains('@')) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
+            ),
+          );
+          return;
+        }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(response['message'] ?? 'Google Sign-In failed')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint("GOOGLE SIGN IN EXCEPTION: $e");
+      if (mounted) {
+        String msg = 'Google Sign-In error: $e';
+        if (e is GoogleSignInException) {
+          msg = 'Google Sign-In Exception (${e.code}): ${e.description ?? "No message"}';
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.sports_soccer, size: 60, color: AppColors.pink),
-              const SizedBox(height: 20),
-              Text(
-                _otpRequested ? "Verify OTP" : "Partner Portal Login",
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _otpRequested ? "Enter the 6-digit code sent to you" : "Enter your email address registered as venue partner",
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 32),
-              if (!_otpRequested) ...[
-                TextField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.mail_outline, color: AppColors.pink),
-                    hintText: "Email Address",
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Image.asset(
+                    'assets/images/logo.png',
+                    width: 72,
+                    height: 72,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.pink.withOpacity(0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.sports_soccer_rounded, size: 48, color: AppColors.pink),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _requestOtp,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.pink,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: _isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text("Request OTP", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                const SizedBox(height: 20),
+                Text(
+                  _otpRequested 
+                      ? "Verify OTP" 
+                      : (_isSignUp ? "Create Partner Account" : "Partner Portal Login"),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                 ),
-              ] else ...[
-                TextField(
-                  controller: _otpController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.lock, color: AppColors.pink),
-                    hintText: "Enter OTP (e.g. 123456)",
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  _otpRequested 
+                      ? "Enter the 6-digit code sent to you" 
+                      : (_isSignUp 
+                          ? "Register with email and password, then verify OTP" 
+                          : "Enter your email address and password to log in"),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey, fontSize: 13),
                 ),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _verifyOtp,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.pink,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                const SizedBox(height: 32),
+                if (!_otpRequested) ...[
+                  TextField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.emailAddress,
+                    style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.mail_outline_rounded, color: AppColors.pink),
+                      hintText: "Email Address",
+                      filled: true,
+                      fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    ),
                   ),
-                  child: _isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text("Verify & Login", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-                ),
-                TextButton(
-                  onPressed: () => setState(() => _otpRequested = false),
-                  child: const Text("Change Phone Number", style: TextStyle(color: AppColors.pink)),
-                )
-              ]
-            ],
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: !_passwordVisible,
+                    style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.lock_outline_rounded, color: AppColors.pink),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _passwordVisible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                          color: Colors.grey,
+                          size: 20,
+                        ),
+                        onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
+                      ),
+                      hintText: "Password",
+                      filled: true,
+                      fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _isLoading ? null : _requestOtp,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.pink,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : Text(
+                            _isSignUp ? "Sign Up & Verify" : "Sign In", 
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)
+                          ),
+                  ),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: GestureDetector(
+                      onTap: () => setState(() {
+                        _isSignUp = !_isSignUp;
+                        _passwordController.clear();
+                      }),
+                      child: Text(
+                        _isSignUp 
+                            ? "Already have an account? Sign In" 
+                            : "Don't have an account? Sign Up",
+                        style: const TextStyle(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      const Expanded(child: Divider(color: Colors.white10)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Text("OR", style: TextStyle(color: Colors.grey[500], fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                      const Expanded(child: Divider(color: Colors.white10)),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  OutlinedButton.icon(
+                    onPressed: _isLoading ? null : _handleGoogleSignIn,
+                    icon: const Icon(Icons.g_mobiledata_rounded, color: AppColors.pink, size: 24),
+                    label: Text(
+                      _isSignUp ? "Sign up with Google" : "Continue with Google",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white10),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ] else ...[
+                  TextField(
+                    controller: _otpController,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.lock, color: AppColors.pink),
+                      hintText: "Enter OTP (e.g. 123456)",
+                      filled: true,
+                      fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _isLoading ? null : _verifyOtp,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.pink,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Text("Verify & Login", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
+                  const SizedBox(height: 12),
+                  Center(
+                    child: TextButton(
+                      onPressed: (_isLoading || _resendCountdown > 0) ? null : _requestOtp,
+                      child: Text(
+                        _resendCountdown > 0 ? "Resend OTP in ${_resendCountdown}s" : "Resend OTP",
+                        style: TextStyle(
+                          color: (_isLoading || _resendCountdown > 0) ? Colors.grey : AppColors.pink,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Center(
+                    child: TextButton(
+                      onPressed: () => setState(() => _otpRequested = false),
+                      child: const Text("Back to Login", style: TextStyle(color: AppColors.pink, fontWeight: FontWeight.bold)),
+                    ),
+                  )
+                ]
+              ],
+            ),
           ),
         ),
       ),
@@ -459,7 +719,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 280),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           color: isSelected ? activeColor.withOpacity(0.12) : Colors.transparent,
@@ -842,11 +1102,17 @@ class _HomeTabState extends State<HomeTab> with WidgetsBindingObserver {
           // Main Scroll View
           _isLoading
               ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
-              : SafeArea(
-                  bottom: false,
-                  child: CustomScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    slivers: [
+              : RefreshIndicator(
+                  onRefresh: () async {
+                    _loadData();
+                    await Future.delayed(const Duration(milliseconds: 600));
+                  },
+                  color: AppColors.pink,
+                  child: SafeArea(
+                    bottom: false,
+                    child: CustomScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      slivers: [
                       // Premium App Bar with rounded designs and Location / Theme actions
                       SliverAppBar(
                         expandedHeight: 70,
@@ -1131,6 +1397,7 @@ class _HomeTabState extends State<HomeTab> with WidgetsBindingObserver {
                     ],
                   ),
                 ),
+      ),
           // Floating Scan E-Ticket CTA button (Always visible, sits above Bottom Navigation)
           if (!_isLoading)
             Positioned(
@@ -1401,10 +1668,11 @@ class _BookingsTabState extends State<BookingsTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Filter Chips
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                SizedBox(
+                  height: 42,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
                     children: ["All", "Today", "Upcoming", "Completed"].map((filter) {
                       final isSelected = _selectedFilter == filter;
                       return GestureDetector(
@@ -1414,6 +1682,7 @@ class _BookingsTabState extends State<BookingsTab> {
                           });
                         },
                         child: Container(
+                          margin: const EdgeInsets.only(right: 8),
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                           decoration: BoxDecoration(
                             gradient: isSelected ? AppColors.brandGradient : null,
@@ -1423,12 +1692,14 @@ class _BookingsTabState extends State<BookingsTab> {
                               color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.06),
                             ),
                           ),
-                          child: Text(
-                            filter,
-                            style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey.shade400,
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                              fontSize: 13,
+                          child: Center(
+                            child: Text(
+                              filter,
+                              style: TextStyle(
+                                color: isSelected ? Colors.white : Colors.grey.shade400,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         ),
@@ -1496,11 +1767,28 @@ class _BookingsTabState extends State<BookingsTab> {
                 ],
 
                 Expanded(
-                  child: filtered.isEmpty
-                      ? const Center(child: Text("No bookings matching this filter."))
-                      : ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: filtered.length,
+                  child: RefreshIndicator(
+                    onRefresh: () async {
+                      _loadBookings();
+                      await Future.delayed(const Duration(milliseconds: 600));
+                    },
+                    color: AppColors.pink,
+                    child: filtered.isEmpty
+                        ? ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            children: [
+                              SizedBox(
+                                height: MediaQuery.of(context).size.height * 0.5,
+                                child: const Center(
+                                  child: Text("No bookings matching this filter."),
+                                ),
+                              )
+                            ],
+                          )
+                        : ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            itemCount: filtered.length,
                           itemBuilder: (context, index) {
                             final b = filtered[index];
                             final isConfirmed = b['status'] == "CONFIRMED";
@@ -1568,6 +1856,7 @@ class _BookingsTabState extends State<BookingsTab> {
                             );
                           },
                         ),
+                  ),
                 )
               ],
             ),
@@ -1614,7 +1903,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text("Booking Details")),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16.0),
               child: Column(
@@ -1811,7 +2100,7 @@ class _ScanTicketScreenState extends State<ScanTicketScreen> with SingleTickerPr
     return Scaffold(
       appBar: AppBar(title: const Text("Scan E-Ticket")),
       body: _isVerifying
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : Stack(
               children: [
                 // 1. Real Camera Viewfinder
@@ -2017,13 +2306,30 @@ class _VenuesTabState extends State<VenuesTab> {
           child: const Icon(Icons.add, color: Colors.white),
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
-          : _venues.isEmpty
-              ? const Center(child: Text("You have no venues created yet. Tap '+' to add one."))
-              : ListView.builder(
-                  padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 90),
-                  itemCount: _venues.length,
+      body: RefreshIndicator(
+        onRefresh: () async {
+          _loadVenues();
+          await Future.delayed(const Duration(milliseconds: 600));
+        },
+        color: AppColors.pink,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
+            : _venues.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.7,
+                        child: const Center(
+                          child: Text("You have no venues created yet. Tap '+' to add one."),
+                        ),
+                      )
+                    ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 90),
+                    itemCount: _venues.length,
                   itemBuilder: (context, index) {
                     final v = _venues[index];
                     final isListed = v['status'] == "listed";
@@ -2036,7 +2342,13 @@ class _VenuesTabState extends State<VenuesTab> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => SlotSchedulingScreen(venueId: v['venue_id'], venueName: v['name']),
+                              builder: (context) => SlotSchedulingScreen(
+                                venueId: v['venue_id'], 
+                                venueName: v['name'],
+                                slotMode: v['slot_mode'] ?? '60m',
+                                openingTime: v['opening_time'] ?? '09:00 AM',
+                                closingTime: v['closing_time'] ?? '09:00 PM',
+                              ),
                             ),
                           );
                         },
@@ -2146,6 +2458,7 @@ class _VenuesTabState extends State<VenuesTab> {
                     );
                   },
                 ),
+      ),
     );
   }
 }
@@ -2261,6 +2574,30 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
 
   bool _isLoading = false;
 
+  String _to12Hour(String timeStr) {
+    try {
+      final clean = timeStr.trim().toUpperCase();
+      if (clean.contains("AM") || clean.contains("PM")) {
+        return clean;
+      }
+      final parts = clean.split(':');
+      int hour = int.parse(parts[0]);
+      final minute = parts[1];
+      String ampm = "AM";
+      if (hour >= 12) {
+        ampm = "PM";
+        if (hour > 12) {
+          hour -= 12;
+        }
+      } else if (hour == 0) {
+        hour = 12;
+      }
+      return "${hour.toString().padLeft(2, '0')}:${minute.padLeft(2, '0')} $ampm";
+    } catch (_) {
+      return "09:00 AM";
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -2313,6 +2650,8 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
       }
 
       _contactPhoneController.text = v['contact_phone'] ?? '';
+      _openingTime = _to12Hour(v['opening_time'] ?? '09:00 AM');
+      _closingTime = _to12Hour(v['closing_time'] ?? '09:00 PM');
       
       // Images
       final imgs = List<String>.from(v['images'] ?? []);
@@ -2329,11 +2668,7 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
       _hasShowers = ams.contains("Showers");
       _hasLockers = ams.contains("Lockers");
     } else {
-      // Default image presets for a new venue
-      // Default image presets for a new venue
-      _imgController1.text = "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=800";
-      _imgController2.text = "https://images.unsplash.com/photo-1517649763962-0c623066013b?q=80&w=800";
-      _imgController3.text = "https://images.unsplash.com/photo-1529900748604-07564a03e7a6?q=80&w=800";
+      // Leave image controllers empty by default for user upload
     }
   }
 
@@ -2576,6 +2911,8 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
           contactPhone: _contactPhoneController.text.trim(),
           latitude: _userLat,
           longitude: _userLng,
+          openingTime: _openingTime,
+          closingTime: _closingTime,
         );
       } else {
         res = await ApiService.createPartnerVenue(
@@ -2589,6 +2926,8 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
           contactPhone: _contactPhoneController.text.trim(),
           latitude: _userLat,
           longitude: _userLng,
+          openingTime: _openingTime,
+          closingTime: _closingTime,
         );
       }
       setState(() => _isLoading = false);
@@ -2725,13 +3064,21 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
         imageQuality: 60,
       );
       if (image != null) {
-        final bytes = await File(image.path).readAsBytes();
-        final base64String = base64Encode(bytes);
-        final extension = image.path.split('.').last.toLowerCase();
-        final mimeType = (extension == 'png') ? 'image/png' : 'image/jpeg';
-        setState(() {
-          controller.text = "data:$mimeType;base64,$base64String";
-        });
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(child: CircularProgressIndicator(color: AppColors.pink)),
+        );
+        final uploadRes = await ApiService.uploadFile(image.path);
+        if (mounted) Navigator.pop(context);
+
+        if (uploadRes['success'] == true) {
+          setState(() {
+            controller.text = uploadRes['data']['url'];
+          });
+        } else {
+          _showValidationError(uploadRes['error']?['message'] ?? uploadRes['message'] ?? 'Failed to upload image');
+        }
       }
     } catch (e) {
       debugPrint("Error picking image: $e");
@@ -2787,7 +3134,7 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(titleText)),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : Padding(
               padding: const EdgeInsets.all(24.0),
               child: Column(
@@ -3400,7 +3747,17 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
 class SlotSchedulingScreen extends StatefulWidget {
   final String venueId;
   final String venueName;
-  const SlotSchedulingScreen({super.key, required this.venueId, required this.venueName});
+  final String slotMode;
+  final String openingTime;
+  final String closingTime;
+  const SlotSchedulingScreen({
+    super.key, 
+    required this.venueId, 
+    required this.venueName,
+    required this.slotMode,
+    required this.openingTime,
+    required this.closingTime,
+  });
 
   @override
   State<SlotSchedulingScreen> createState() => _SlotSchedulingScreenState();
@@ -3410,6 +3767,8 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
   List<dynamic> _slots = [];
   bool _isLoading = true;
   late String _selectedDate;
+  bool _isSelectionMode = false;
+  final Set<String> _selectedSlotIds = {};
 
   @override
   void initState() {
@@ -3440,27 +3799,165 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
     _loadSlots();
   }
 
+  String _to24Hour(String time12h) {
+    try {
+      final clean = time12h.trim().toUpperCase();
+      final parts = clean.split(' ');
+      if (parts.length < 2) return clean;
+      final timeParts = parts[0].split(':');
+      int hour = int.parse(timeParts[0]);
+      final int minute = int.parse(timeParts[1]);
+      final ampm = parts[1];
+
+      if (ampm == "PM" && hour < 12) {
+        hour += 12;
+      } else if (ampm == "AM" && hour == 12) {
+        hour = 0;
+      }
+
+      return "${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}";
+    } catch (_) {
+      return "06:00";
+    }
+  }
+
+  int _getDurationMinutes(String slotMode) {
+    try {
+      final clean = slotMode.replaceAll(RegExp(r'[^0-9]'), '');
+      return int.parse(clean);
+    } catch (_) {
+      return 60;
+    }
+  }
+
   void _bulkGenerate() async {
-    final startController = TextEditingController(text: "06:00");
-    final endController = TextEditingController(text: "22:00");
+    final defaultStart = _to24Hour(widget.openingTime);
+    final defaultEnd = _to24Hour(widget.closingTime);
+    final startController = TextEditingController(text: defaultStart);
+    final endController = TextEditingController(text: defaultEnd);
     final priceController = TextEditingController(text: "1000");
+
+    String rangeOption = "Selected Date";
+    List<bool> selectedDays = [false, false, false, false, false, false, false];
+    const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Bulk Generate Slots"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: startController, decoration: const InputDecoration(labelText: "Start Time (HH:MM)")),
-            TextField(controller: endController, decoration: const InputDecoration(labelText: "End Time (HH:MM)")),
-            TextField(controller: priceController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "Price (₹)")),
-          ],
+        content: StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.5,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: startController, 
+                      decoration: const InputDecoration(
+                        labelText: "Start Time (HH:MM)", 
+                        labelStyle: TextStyle(fontSize: 13, color: Colors.grey),
+                        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                      )
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: endController, 
+                      decoration: const InputDecoration(
+                        labelText: "End Time (HH:MM)", 
+                        labelStyle: TextStyle(fontSize: 13, color: Colors.grey),
+                        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                      )
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: priceController, 
+                      keyboardType: TextInputType.number, 
+                      decoration: const InputDecoration(
+                        labelText: "Price (₹)", 
+                        labelStyle: TextStyle(fontSize: 13, color: Colors.grey),
+                        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                      )
+                    ),
+                    const SizedBox(height: 20),
+                    const Text("Generation Range", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      isExpanded: true,
+                      value: rangeOption,
+                      items: [
+                        DropdownMenuItem(
+                          value: "Selected Date", 
+                          child: Text("Selected Date ($_selectedDate)", overflow: TextOverflow.ellipsis),
+                        ),
+                        const DropdownMenuItem(
+                          value: "Whole Week", 
+                          child: Text("Whole Week (Next 7 Days)", overflow: TextOverflow.ellipsis),
+                        ),
+                        const DropdownMenuItem(
+                          value: "Selected Days", 
+                          child: Text("Selected Days of Week", overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            rangeOption = val;
+                          });
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                    ),
+                    if (rangeOption == "Selected Days") ...[
+                      const SizedBox(height: 16),
+                      const Text("Select Days:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: List.generate(7, (idx) {
+                          final isSel = selectedDays[idx];
+                          return FilterChip(
+                            label: Text(weekdays[idx], style: TextStyle(color: isSel ? Colors.white : Colors.grey, fontSize: 12)),
+                            selected: isSel,
+                            selectedColor: AppColors.pink,
+                            checkmarkColor: Colors.white,
+                            onSelected: (selected) {
+                              setDialogState(() {
+                                selectedDays[idx] = selected;
+                              });
+                            },
+                          );
+                        }),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          }
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () {
+              if (rangeOption == "Selected Days" && !selectedDays.contains(true)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please select at least one day"), backgroundColor: Colors.redAccent),
+                );
+                return;
+              }
+              Navigator.pop(context, true);
+            },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
             child: const Text("Generate", style: TextStyle(color: Colors.white)),
           )
@@ -3470,14 +3967,87 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
 
     if (confirm == true) {
       setState(() => _isLoading = true);
-      await ApiService.bulkGenerateSlots(
-        widget.venueId,
-        _selectedDate,
-        startController.text,
-        endController.text,
-        double.parse(priceController.text),
-        60,
-      );
+
+      List<String> targetDates = [];
+      if (rangeOption == "Selected Date") {
+        targetDates = [_selectedDate];
+      } else if (rangeOption == "Whole Week") {
+        for (int i = 0; i < 7; i++) {
+          final d = DateTime.now().add(Duration(days: i));
+          targetDates.add(d.toIso8601String().substring(0, 10));
+        }
+      } else {
+        for (int i = 0; i < 7; i++) {
+          final d = DateTime.now().add(Duration(days: i));
+          final index = d.weekday - 1; 
+          if (selectedDays[index]) {
+            targetDates.add(d.toIso8601String().substring(0, 10));
+          }
+        }
+      }
+
+      if (targetDates.isNotEmpty) {
+        try {
+          await ApiService.bulkGenerateSlots(
+            widget.venueId,
+            targetDates,
+            startController.text.trim(),
+            endController.text.trim(),
+            double.parse(priceController.text.trim()),
+            _getDurationMinutes(widget.slotMode),
+          );
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Failed to generate slots: $e"), backgroundColor: Colors.redAccent),
+          );
+        }
+      }
+      _loadSlots();
+    }
+  }
+
+  void _selectAllSlots() {
+    setState(() {
+      final unbookedSlots = _slots.where((s) => s['status'] != 'booked').map((s) => s['slot_id'] as String).toList();
+      _selectedSlotIds.clear();
+      _selectedSlotIds.addAll(unbookedSlots);
+    });
+  }
+
+  void _deleteSelectedSlots() async {
+    if (_selectedSlotIds.isEmpty) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Delete Slots"),
+        content: Text("Are you sure you want to delete ${_selectedSlotIds.length} slot(s)?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text("Delete", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      setState(() => _isLoading = true);
+      try {
+        await ApiService.bulkDeleteSlots(widget.venueId, _selectedSlotIds.toList());
+        setState(() {
+          _selectedSlotIds.clear();
+          _isSelectionMode = false;
+        });
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to delete slots: $e"), backgroundColor: Colors.redAccent),
+        );
+      }
       _loadSlots();
     }
   }
@@ -3487,9 +4057,42 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.venueName)),
+      appBar: AppBar(
+        title: Text(widget.venueName),
+        actions: [
+          if (_isSelectionMode) ...[
+            TextButton(
+              onPressed: _selectAllSlots,
+              child: const Text("Select All"),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete, color: Colors.redAccent),
+              onPressed: _selectedSlotIds.isEmpty ? null : _deleteSelectedSlots,
+            ),
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () {
+                setState(() {
+                  _isSelectionMode = false;
+                  _selectedSlotIds.clear();
+                });
+              },
+            ),
+          ] else ...[
+            if (_slots.any((s) => s['status'] != 'booked'))
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _isSelectionMode = true;
+                  });
+                },
+                child: const Text("Select"),
+              ),
+          ],
+        ],
+      ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : Padding(
               padding: const EdgeInsets.all(16.0),
               child: Column(
@@ -3565,6 +4168,7 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
                               final slot = _slots[index];
                               final isBooked = slot['status'] == 'booked';
                               final isBlocked = slot['status'] == 'blocked_by_partner';
+                              final isSelected = _selectedSlotIds.contains(slot['slot_id']);
 
                               Color bg = theme.colorScheme.surface;
                               Color textColor = theme.colorScheme.onSurface;
@@ -3577,21 +4181,82 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
                                 textColor = Colors.grey;
                               }
 
+                              if (_isSelectionMode && isSelected) {
+                                bg = AppColors.pink.withOpacity(0.15);
+                              }
+
                               return GestureDetector(
-                                onTap: isBooked ? null : () => _toggleBlock(slot['slot_id']),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: bg,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.grey.withOpacity(0.2)),
-                                  ),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(slot['start_time'] ?? '', style: TextStyle(fontWeight: FontWeight.bold, color: textColor)),
-                                      Text("₹${slot['price']}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                    ],
-                                  ),
+                                onTap: isBooked 
+                                    ? null 
+                                    : (_isSelectionMode 
+                                        ? () {
+                                            setState(() {
+                                              if (isSelected) {
+                                                _selectedSlotIds.remove(slot['slot_id']);
+                                              } else {
+                                                _selectedSlotIds.add(slot['slot_id']);
+                                              }
+                                            });
+                                          }
+                                        : () => _toggleBlock(slot['slot_id'])),
+                                onLongPress: isBooked || _isSelectionMode
+                                    ? null
+                                    : () {
+                                        setState(() {
+                                          _isSelectionMode = true;
+                                          _selectedSlotIds.add(slot['slot_id']);
+                                        });
+                                      },
+                                child: Stack(
+                                  children: [
+                                    Container(
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      decoration: BoxDecoration(
+                                        color: bg,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: isSelected 
+                                              ? AppColors.pink 
+                                              : Colors.grey.withOpacity(0.2),
+                                          width: isSelected ? 2.0 : 1.0,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            slot['start_time'] ?? '', 
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold, 
+                                              color: textColor,
+                                            ),
+                                          ),
+                                          Text(
+                                            "₹${slot['price']}", 
+                                            style: const TextStyle(
+                                              fontSize: 11, 
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (_isSelectionMode && !isBooked)
+                                      Positioned(
+                                        top: 4,
+                                        right: 4,
+                                        child: Icon(
+                                          isSelected 
+                                              ? Icons.check_circle 
+                                              : Icons.radio_button_unchecked,
+                                          size: 14,
+                                          color: isSelected 
+                                              ? AppColors.pink 
+                                              : Colors.grey,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               );
                             },
@@ -3602,11 +4267,24 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton(
-                          onPressed: _bulkGenerate,
-                          style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-                          child: const Text("Bulk Generate Slots"),
-                        ),
+                        child: _isSelectionMode
+                            ? ElevatedButton(
+                                onPressed: _selectedSlotIds.isEmpty ? null : _deleteSelectedSlots,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.redAccent,
+                                  minimumSize: const Size(double.infinity, 50),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                child: Text(
+                                  "Delete Selected (${_selectedSlotIds.length})",
+                                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                              )
+                            : OutlinedButton(
+                                onPressed: _bulkGenerate,
+                                style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
+                                child: const Text("Bulk Generate Slots"),
+                              ),
                       ),
                     ],
                   )
@@ -3663,7 +4341,7 @@ class _PaymentsTabState extends State<PaymentsTab> {
         backgroundColor: Colors.transparent,
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : Column(
               children: [
                 // Tab Swapper
@@ -3719,9 +4397,16 @@ class _PaymentsTabState extends State<PaymentsTab> {
                 ),
                 const SizedBox(height: 20),
                 Expanded(
-                  child: _activeSubTab == 0
-                      ? _buildOverviewTab(theme)
-                      : _buildSettlementList(),
+                  child: RefreshIndicator(
+                    onRefresh: () async {
+                      _loadSettlements();
+                      await Future.delayed(const Duration(milliseconds: 600));
+                    },
+                    color: AppColors.pink,
+                    child: _activeSubTab == 0
+                        ? _buildOverviewTab(theme)
+                        : _buildSettlementList(),
+                  ),
                 )
               ],
             ),
@@ -3752,6 +4437,7 @@ class _PaymentsTabState extends State<PaymentsTab> {
     }
 
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3803,9 +4489,18 @@ class _PaymentsTabState extends State<PaymentsTab> {
 
   Widget _buildSettlementList() {
     if (_settlements.isEmpty) {
-      return const Center(child: Text("No settlements generated yet."));
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.5,
+            child: const Center(child: Text("No settlements generated yet.")),
+          )
+        ],
+      );
     }
     return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: _settlements.length,
       itemBuilder: (context, index) {
@@ -3857,7 +4552,7 @@ class _DisputesScreenState extends State<DisputesScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text("Disputes Board")),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
           : _disputes.isEmpty
               ? const Center(child: Text("No disputes logged for your venues."))
               : ListView.builder(
@@ -3906,6 +4601,8 @@ class ProfileTab extends StatefulWidget {
 class _ProfileTabState extends State<ProfileTab> {
   Map<String, dynamic> _profile = {};
   bool _isLoading = true;
+  Map<String, dynamic> _systemSettings = {};
+  Map<String, String> _localDocPaths = {};
 
   // Notification preferences
   bool _bookingAlerts = true;
@@ -3919,17 +4616,865 @@ class _ProfileTabState extends State<ProfileTab> {
   @override
   void initState() {
     super.initState();
+    _loadLocalDocPaths();
+    _loadPreferences();
     _loadProfile();
+  }
+
+  void _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _bookingAlerts = prefs.getBool('booking_alerts') ?? true;
+      _paymentsAlerts = prefs.getBool('payments_alerts') ?? true;
+      _promotionsAlerts = prefs.getBool('promotions_alerts') ?? false;
+      _emailUpdates = prefs.getBool('email_updates') ?? true;
+      _twoFactorEnabled = prefs.getBool('two_factor_enabled') ?? false;
+    });
+  }
+
+  void _loadLocalDocPaths() async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys();
+    final Map<String, String> paths = {};
+    for (final key in keys) {
+      if (key.startsWith('kyc_path_')) {
+        final docType = key.replaceFirst('kyc_path_', '');
+        paths[docType] = prefs.getString(key) ?? '';
+      }
+    }
+    setState(() {
+      _localDocPaths = paths;
+    });
+  }
+
+  void _saveLocalDocPath(String docType, String tempPath) async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final File tempFile = File(tempPath);
+      if (tempFile.existsSync()) {
+        final String extension = tempPath.split('.').last;
+        final String permanentPath = '${directory.path}/kyc_$docType.$extension';
+        final File permanentFile = await tempFile.copy(permanentPath);
+        
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('kyc_path_$docType', permanentFile.path);
+        setState(() {
+          _localDocPaths[docType] = permanentFile.path;
+        });
+        debugPrint("KYC PREVIEW: Saved permanent document path: ${permanentFile.path}");
+      }
+    } catch (e) {
+      debugPrint("KYC PREVIEW: Error saving document copy: $e");
+    }
+  }
+
+  void _showDocumentUploadDialog(String label, String docType) {
+    XFile? selectedFile;
+    bool isUploading = false;
+    final numberController = TextEditingController(
+      text: docType == 'gst_certificate' 
+          ? (_profile['gst_number'] ?? '') 
+          : (docType == 'pan_card' 
+              ? (_profile['pan_number'] ?? '') 
+              : (docType == 'ownership_proof' ? (_profile['aadhaar_number'] ?? '') : ''))
+    );
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Text("Upload $label", style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A))),
+              content: SizedBox(
+                width: 320,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Please upload the official $label for verification:", style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 13)),
+                    const SizedBox(height: 16),
+                    if (selectedFile == null)
+                      InkWell(
+                        onTap: () async {
+                          final ImagePicker picker = ImagePicker();
+                          final XFile? file = await picker.pickImage(source: ImageSource.gallery);
+                          if (file != null) {
+                            setDialogState(() {
+                              selectedFile = file;
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(Icons.cloud_upload_outlined, size: 36, color: AppColors.pink),
+                              const SizedBox(height: 8),
+                              Text("Select document from gallery", style: TextStyle(color: AppColors.pink, fontWeight: FontWeight.w600, fontSize: 13)),
+                              const SizedBox(height: 4),
+                              Text("Supports PNG, JPG, PDF up to 5MB", style: TextStyle(color: isDark ? Colors.white30 : Colors.grey, fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: AppColors.pink.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.pink.withOpacity(0.2)),
+                        ),
+                        child: Column(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.file(
+                                File(selectedFile!.path),
+                                width: double.infinity,
+                                height: 120,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Icon(Icons.insert_drive_file_rounded, size: 24, color: AppColors.pink),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        selectedFile!.name,
+                                        style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.bold, fontSize: 13),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        "Document Selected",
+                                        style: TextStyle(color: isDark ? Colors.white60 : Colors.grey, fontSize: 11),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
+                                  onPressed: () {
+                                    setDialogState(() {
+                                      selectedFile = null;
+                                    });
+                                  },
+                                )
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (docType == 'gst_certificate' || docType == 'pan_card' || docType == 'ownership_proof') ...[
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: numberController,
+                        style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
+                        keyboardType: docType == 'ownership_proof' ? TextInputType.number : TextInputType.text,
+                        maxLength: docType == 'ownership_proof' ? 12 : (docType == 'pan_card' ? 10 : 15),
+                        decoration: InputDecoration(
+                          labelText: docType == 'gst_certificate' 
+                              ? "GST Number (15-digit)" 
+                              : (docType == 'pan_card' ? "PAN Number (10-digit)" : "Aadhaar Number (12-digit)"),
+                          labelStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                          enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                          focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                          counterText: "",
+                        ),
+                        textCapitalization: docType == 'ownership_proof' ? TextCapitalization.none : TextCapitalization.characters,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+              actions: [
+                TextButton(
+                  onPressed: isUploading ? null : () => Navigator.pop(dialogCtx),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isUploading || selectedFile == null
+                      ? null
+                      : () async {
+                          final String docNum = numberController.text.trim();
+                          if ((docType == 'gst_certificate' || docType == 'pan_card' || docType == 'ownership_proof') && docNum.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Please enter your ${docType == 'gst_certificate' ? "GST" : (docType == 'pan_card' ? "PAN" : "Aadhaar")} number'), 
+                                backgroundColor: Colors.redAccent
+                              ),
+                            );
+                            return;
+                          }
+                          if (docType == 'ownership_proof' && docNum.length != 12) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Please enter a valid 12-digit Aadhaar number'), backgroundColor: Colors.redAccent),
+                            );
+                            return;
+                          }
+                          setDialogState(() => isUploading = true);
+                          try {
+                            final uploadRes = await ApiService.uploadFile(selectedFile!.path);
+                            if (uploadRes['success'] == true) {
+                              final fileUrl = uploadRes['data']['url'];
+                              final res = await ApiService.submitPartnerKyc(
+                                docType, 
+                                fileUrl,
+                                gstNumber: docType == 'gst_certificate' ? docNum.toUpperCase() : null,
+                                panNumber: docType == 'pan_card' ? docNum.toUpperCase() : null,
+                                aadhaarNumber: docType == 'ownership_proof' ? docNum : null,
+                              );
+                              if (res['success'] == true) {
+                                if (mounted) {
+                                  Navigator.pop(dialogCtx);
+                                  _loadProfile();
+                                  _saveLocalDocPath(docType, selectedFile!.path);
+                                  _showCenteredSuccessPop(
+                                    "$label Submitted", 
+                                    "Your document has been submitted successfully and is currently under review by our admin team."
+                                  );
+                                }
+                              } else {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(res['message'] ?? 'Failed to submit document'), backgroundColor: Colors.redAccent),
+                                  );
+                                }
+                              }
+                            } else {
+                              if (mounted) {
+                                final errMsg = uploadRes['error']?['message'] ?? uploadRes['message'] ?? 'Failed to upload document';
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(errMsg), backgroundColor: Colors.redAccent),
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
+                              );
+                            }
+                          } finally {
+                            setDialogState(() => isUploading = false);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
+                  child: isUploading
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text("Submit", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showCenteredSuccessPop(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: GlassContainer(
+            radius: 24,
+            padding: const EdgeInsets.all(24),
+            border: Border.all(color: Colors.white.withOpacity(0.12)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF3DDC84),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.check_circle_outline_rounded, size: 48, color: Colors.white),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  message,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.pink,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text("Done", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFallbackTemplate(String docTypeLower) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (docTypeLower.contains('pan')) {
+      return Container(
+        width: double.infinity,
+        height: 180,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0F5A84), Color(0xFF063A58)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("आयकर विभाग", style: TextStyle(color: Colors.white70, fontSize: 8, fontWeight: FontWeight.bold)),
+                      Text("INCOME TAX DEPARTMENT", style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text("GOVT. OF INDIA", style: TextStyle(color: Colors.amber, fontSize: 7, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 50,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white30),
+                  ),
+                  child: const Icon(Icons.person, color: Colors.white30, size: 36),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("NAME / नाम", style: TextStyle(color: Colors.white54, fontSize: 8)),
+                      Text(_profile['email'] != null ? _profile['email'].split('@')[0].replaceAll(RegExp(r'[0-9]'), '').toUpperCase() : 'RAJESH SHARMA', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      const Text("PERMANENT ACCOUNT NUMBER / खाता संख्या", style: TextStyle(color: Colors.white54, fontSize: 8)),
+                      const Text("ABCDE1234F", style: TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const Spacer(),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("CARD TYPE: INDIVIDUAL", style: TextStyle(color: Colors.white30, fontSize: 8)),
+                Container(
+                  width: 80,
+                  height: 16,
+                  decoration: const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: Colors.white54, style: BorderStyle.solid)),
+                  ),
+                  child: const Center(
+                    child: Text("Signature", style: TextStyle(color: Colors.white30, fontSize: 8, fontStyle: FontStyle.italic)),
+                  ),
+                ),
+              ],
+            )
+          ],
+        ),
+      );
+    }
+
+    if (docTypeLower.contains('gst') || docTypeLower.contains('cert')) {
+      return Container(
+        width: double.infinity,
+        height: 180,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFC5A880), width: 3),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            const Text("FORM GST REG-06", style: TextStyle(color: Color(0xFF333333), fontSize: 8, fontWeight: FontWeight.bold)),
+            const Text("GOVERNMENT OF INDIA", style: TextStyle(color: Color(0xFFC5A880), fontSize: 10, fontWeight: FontWeight.bold)),
+            const Text("CERTIFICATE OF REGISTRATION", style: TextStyle(color: Color(0xFF333333), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+            const SizedBox(height: 8),
+            Container(height: 1, color: const Color(0xFFC5A880)),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFFC5A880), width: 1.5),
+                    ),
+                    child: const Center(child: Icon(Icons.gavel_rounded, color: Color(0xFFC5A880), size: 24)),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text("Registration Number: 24ABCDE1234F1Z5", style: TextStyle(color: Colors.black87, fontSize: 8, fontWeight: FontWeight.bold)),
+                        SizedBox(height: 4),
+                        Text("Legal Name: SUNSET SPORTS COMPLEX", style: TextStyle(color: Colors.black54, fontSize: 7)),
+                        SizedBox(height: 2),
+                        Text("Jurisdiction: State Tax Department, Gujarat", style: TextStyle(color: Colors.black54, fontSize: 7)),
+                      ],
+                    ),
+                  )
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(height: 1, color: const Color(0xFFC5A880)),
+            const SizedBox(height: 4),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("Date of Issue: 12/01/2026", style: TextStyle(color: Colors.black38, fontSize: 8)),
+                Text("Approved by Authority", style: TextStyle(color: Color(0xFF3DDC84), fontSize: 8, fontWeight: FontWeight.bold)),
+              ],
+            )
+          ],
+        ),
+      );
+    }
+
+    if (docTypeLower.contains('cheque')) {
+      return Container(
+        width: double.infinity,
+        height: 180,
+        decoration: BoxDecoration(
+          color: const Color(0xFFE3F2FD),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF90CAF9), width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Stack(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text("STATE BANK OF INDIA", style: TextStyle(color: Color(0xFF0D47A1), fontSize: 12, fontWeight: FontWeight.bold)),
+                    Text("Date: ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}", style: TextStyle(color: Colors.black87, fontSize: 9)),
+                  ],
+                ),
+                Text("IFS CODE: SBIN0001234", style: TextStyle(color: Colors.black54, fontSize: 8)),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Text("PAY TO: ", style: TextStyle(color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold)),
+                    Container(
+                      width: 180,
+                      height: 1,
+                      color: Colors.grey[400],
+                    )
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Text("RUPEES: ", style: TextStyle(color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold)),
+                        Container(width: 140, height: 1, color: Colors.grey[400]),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey),
+                      ),
+                      child: const Text("₹  N/A", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                    )
+                  ],
+                ),
+                const Spacer(),
+                const Center(
+                  child: Text("⑈012345⑈ 382002002⑆ 000123⑈ 10", style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: Colors.black87, letterSpacing: 1.5)),
+                )
+              ],
+            ),
+            Center(
+              child: Transform.rotate(
+                angle: -0.25,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.redAccent.withOpacity(0.8), width: 3),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    "CANCELLED",
+                    style: TextStyle(color: Colors.redAccent, fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: 2),
+                  ),
+                ),
+              ),
+            )
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      height: 180,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.grey[100],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.assignment_turned_in, size: 48, color: AppColors.pink),
+          const SizedBox(height: 12),
+          Text(
+            docTypeLower.replaceAll('_', ' ').toUpperCase(),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            "OFFICIAL VERIFIED AGREEMENT & LICENSE DOCUMENT",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey, fontSize: 10),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.verified, size: 14, color: const Color(0xFF3DDC84)),
+              const SizedBox(width: 6),
+              const Text("SECURE BLOCKCHAIN HASHED", style: TextStyle(color: Color(0xFF3DDC84), fontSize: 9, fontWeight: FontWeight.bold)),
+            ],
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDocumentPreview(String docType, String fileUrl) {
+    final docTypeLower = docType.toLowerCase();
+    
+    // 1. Check if we have the actual uploaded local image file!
+    final localPath = _localDocPaths[docType];
+    debugPrint("KYC PREVIEW: docType=$docType, localPath=$localPath");
+    if (localPath != null && localPath.isNotEmpty) {
+      final file = File(localPath);
+      debugPrint("KYC PREVIEW: File exists = ${file.existsSync()}");
+      if (file.existsSync()) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(
+              maxHeight: 400,
+            ),
+            color: Colors.black12,
+            child: Image.file(
+              file,
+              fit: BoxFit.contain,
+            ),
+          ),
+        );
+      }
+    }
+    
+    // 2. Map mock URLs to realistic public images so they always see an actual photographic image
+    String effectiveUrl = fileUrl;
+    if (fileUrl.startsWith('/uploads')) {
+      final serverBase = ApiService.activeUrl.replaceAll('/api', '');
+      effectiveUrl = '$serverBase$fileUrl';
+    } else if (fileUrl.contains('mock-s3-bucket') || fileUrl.isEmpty) {
+      if (docTypeLower.contains('pan')) {
+        effectiveUrl = 'https://images.unsplash.com/photo-1593085512500-5d55148d6f0d?w=600&auto=format&fit=crop';
+      } else if (docTypeLower.contains('gst') || docTypeLower.contains('cert')) {
+        effectiveUrl = 'https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?w=600&auto=format&fit=crop';
+      } else if (docTypeLower.contains('cheque')) {
+        effectiveUrl = 'https://images.unsplash.com/photo-1628157582853-a796fa650a6a?w=600&auto=format&fit=crop';
+      } else {
+        effectiveUrl = 'https://images.unsplash.com/photo-1450133064473-71024230f91b?w=600&auto=format&fit=crop';
+      }
+    }
+    
+    // 3. Render the network image
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(
+          maxHeight: 400,
+        ),
+        color: Colors.black12,
+        child: Image.network(
+          effectiveUrl,
+          fit: BoxFit.contain,
+          errorBuilder: (context, error, stackTrace) => _buildFallbackTemplate(docTypeLower),
+        ),
+      ),
+    );
+  }
+
+  void _showViewAllDocumentsDialog() {
+    final documents = _profile['partner_documents'] as List<dynamic>? ?? [];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text("Uploaded Documents", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              )
+            ],
+          ),
+          content: Container(
+            width: double.maxFinite,
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: documents.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24.0),
+                    child: Text("No documents have been uploaded yet.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                  )
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: documents.length,
+                    separatorBuilder: (context, index) => const Divider(color: Colors.white10),
+                    itemBuilder: (context, index) {
+                      final doc = documents[index];
+                      final docType = doc['document_type'] as String;
+                      final fileUrl = doc['file_url'] as String;
+                      final status = (doc['status'] as String).toUpperCase();
+
+                      IconData getIcon() {
+                        if (docType.contains('cert') || docType.contains('license')) {
+                          return Icons.assignment_outlined;
+                        }
+                        if (docType.contains('pan')) {
+                          return Icons.badge_outlined;
+                        }
+                        return Icons.insert_drive_file_outlined;
+                      }
+
+                      Color getStatusColor() {
+                        if (status == "APPROVED" || status == "VERIFIED" || status == "SIGNED") return const Color(0xFF3DDC84);
+                        if (status == "PENDING") return const Color(0xFFFFB03A);
+                        return Colors.redAccent;
+                      }
+
+                      String formatDocName(String type) {
+                        return type.replaceAll('_', ' ').toUpperCase();
+                      }
+
+                      Widget buildLeading() {
+                        final localPath = _localDocPaths[docType];
+                        if (localPath != null && localPath.isNotEmpty && File(localPath).existsSync()) {
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(localPath),
+                              width: 36,
+                              height: 36,
+                              fit: BoxFit.cover,
+                            ),
+                          );
+                        }
+                        return Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: AppColors.pink.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(getIcon(), color: AppColors.pink, size: 20),
+                        );
+                      }
+
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: buildLeading(),
+                        title: Text(formatDocName(docType), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: getStatusColor().withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(status, style: TextStyle(color: getStatusColor(), fontSize: 9, fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ),
+                        trailing: ElevatedButton(
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (context) {
+                                return AlertDialog(
+                                  backgroundColor: isDark ? AppColors.surface : Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  title: Text(formatDocName(docType)),
+                                  content: SizedBox(
+                                    width: 320,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _buildDocumentPreview(docType, fileUrl),
+                                      ],
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text("Close"),
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.pink.withOpacity(0.2),
+                            foregroundColor: AppColors.pink,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text("View", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Done", style: TextStyle(color: Colors.grey)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _loadProfile() async {
     setState(() => _isLoading = true);
     try {
       final res = await ApiService.getProfile();
+      final data = res['data'] ?? {};
+      
+      final settingsRes = await ApiService.getSettings();
+      final settings = settingsRes['data'] ?? {};
+
       setState(() {
-        _profile = res['data'] ?? {};
+        _profile = data;
+        _systemSettings = settings;
         _isLoading = false;
       });
+      if (data['fcm_token'] == null) {
+        await ApiService.updateProfile(fcmToken: "mock_partner_fcm_token_dev");
+      }
     } catch (e) {
       setState(() => _isLoading = false);
       _showActionDialog("Error Loading Profile", "Failed to retrieve profile data: $e");
@@ -4030,6 +5575,685 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
+  void _showChangePhotoUpload() async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? file = await picker.pickImage(source: ImageSource.gallery);
+      if (file == null) return;
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (spinnerCtx) => const Center(child: CircularProgressIndicator(color: AppColors.pink)),
+      );
+
+      final uploadRes = await ApiService.uploadFile(file.path);
+      if (uploadRes['success'] == true) {
+        final url = uploadRes['data']['url'];
+        final res = await ApiService.updateProfile(avatarUrl: url);
+        if (res['success'] == true) {
+          if (mounted) {
+            Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+            _loadProfile();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Profile photo updated successfully'), backgroundColor: AppColors.success),
+            );
+          }
+        } else {
+          if (mounted) {
+            Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(res['message'] ?? 'Failed to update profile image'), backgroundColor: Colors.redAccent),
+            );
+          }
+        }
+      } else {
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+          final errMsg = uploadRes['error']?['message'] ?? uploadRes['message'] ?? 'Failed to upload image';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(errMsg), backgroundColor: Colors.redAccent),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
+  void _showChangeMobileDialog() {
+    final mobileController = TextEditingController(text: _profile['phone_number'] ?? '');
+    bool isSaving = false;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Text("Change Mobile Number", style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A))),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: mobileController,
+                    keyboardType: TextInputType.phone,
+                    style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
+                    decoration: const InputDecoration(
+                      labelText: "New Mobile Number",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.pop(context),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                          final newMobile = mobileController.text.trim();
+                          if (newMobile.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Please enter a valid mobile number'), backgroundColor: Colors.redAccent),
+                            );
+                            return;
+                          }
+                          setDialogState(() => isSaving = true);
+                          try {
+                            final res = await ApiService.updateProfile(
+                              phoneNumber: newMobile,
+                            );
+                            if (res['success'] == true) {
+                              if (mounted) {
+                                Navigator.pop(context);
+                                _loadProfile();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Mobile number updated successfully'), backgroundColor: AppColors.success),
+                                );
+                              }
+                            } else {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(res['message'] ?? 'Failed to update mobile number'), backgroundColor: Colors.redAccent),
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
+                              );
+                            }
+                          } finally {
+                            setDialogState(() => isSaving = false);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
+                  child: isSaving
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text("Update Mobile", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showManageDevicesDialog() {
+    List<Map<String, String>> mockDevices = [
+      {'name': 'Android Emulator', 'type': 'Current Device', 'status': 'Active Now', 'lastActive': 'Active Now'},
+      {'name': 'iPhone 15 Pro', 'type': 'iOS Mobile', 'status': 'Last active: 2 hours ago', 'lastActive': '2h'},
+      {'name': 'Chrome Web (macOS)', 'type': 'Desktop Browser', 'status': 'Last active: Yesterday', 'lastActive': '1d'},
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text("Manage Devices", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              content: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "These devices are currently logged into your partner account. You can revoke access for any session.",
+                      style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    ...mockDevices.map((device) {
+                      final isCurrent = device['type'] == 'Current Device';
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              device['type']!.contains('Browser') ? Icons.computer_rounded : Icons.phone_android_rounded,
+                              color: AppColors.pink,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    device['name']!,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                      color: isDark ? Colors.white : const Color(0xFF1A1A1A),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    device['status']!,
+                                    style: TextStyle(
+                                      color: isCurrent ? const Color(0xFF3DDC84) : Colors.grey,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (!isCurrent)
+                              IconButton(
+                                icon: const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 18),
+                                onPressed: () {
+                                  setDialogState(() {
+                                    mockDevices.remove(device);
+                                  });
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text("Revoked access for ${device['name']}"),
+                                      backgroundColor: Colors.redAccent,
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                              ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Close"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showWebViewDialog(String title, String url) {
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+      launchUrl(Uri.parse(url));
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final controller = WebViewController()
+          ..setJavaScriptMode(JavaScriptMode.unrestricted)
+          ..loadRequest(Uri.parse(url));
+
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          contentPadding: EdgeInsets.zero,
+          content: Container(
+            width: 360,
+            height: 500,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: WebViewWidget(controller: controller),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Done"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showHelpCenterDialog() {
+    final List<Map<String, String>> faqs = [
+      {
+        'q': 'How do I list a new venue?',
+        'a': 'Go to the Venues tab, click "Add Venue" at the top, fill in the details (name, sports types, pricing, amenities, images), and submit it. Our admin team will review and list it.'
+      },
+      {
+        'q': 'When do settlements process?',
+        'a': 'Payouts are automatically processed every Tuesday for all completed slot bookings from the previous week. You can track settlements in the Settlements tab.'
+      },
+      {
+        'q': 'How do I complete KYC?',
+        'a': 'Go to the Profile tab, scroll to KYC documents, and upload your GST certificate, PAN card, and business license. Verification takes 24-48 business hours.'
+      },
+      {
+        'q': 'Can I customize court booking slots?',
+        'a': 'Yes. You can manage slots and court configurations directly within each venue\'s setting by selecting custom times and base pricing.'
+      },
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Help Center / FAQs", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          content: SizedBox(
+            width: 320,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: faqs.length,
+              itemBuilder: (context, index) {
+                return Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    title: Text(
+                      faqs[index]['q']!,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: isDark ? Colors.white : const Color(0xFF1A1A1A),
+                      ),
+                    ),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 8.0),
+                        child: Text(
+                          faqs[index]['a']!,
+                          style: TextStyle(
+                            color: isDark ? Colors.white70 : Colors.black87,
+                            fontSize: 12,
+                          ),
+                        ),
+                      )
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Close"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showContactSupportDialog() {
+    final supportPhone = _systemSettings['supportPhone'] ?? "1800-284-5383";
+    final supportEmail = _systemSettings['supportEmail'] ?? "support@athletepov.com";
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Contact Support", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          content: SizedBox(
+            width: 320,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Reach out to us via call or email. Our team is available Mon-Sat, 9:00 AM - 9:00 PM.",
+                  style: TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 12),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.phone_in_talk_rounded, color: AppColors.pink),
+                  title: const Text("Call Toll-Free", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  subtitle: Text(supportPhone, style: const TextStyle(fontSize: 12)),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.grey),
+                    onPressed: () {
+                      _copyToClipboard(supportPhone);
+                    },
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.mail_outline_rounded, color: AppColors.pink),
+                  title: const Text("Email Us", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  subtitle: Text(supportEmail, style: const TextStyle(fontSize: 12)),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy_rounded, size: 18, color: Colors.grey),
+                    onPressed: () {
+                      _copyToClipboard(supportEmail);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Close"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showRaiseTicketDialog() {
+    final titleController = TextEditingController();
+    final descController = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text("Raise Support Ticket", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              content: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleController,
+                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
+                      decoration: const InputDecoration(
+                        labelText: "Issue Title",
+                        labelStyle: TextStyle(color: Colors.grey),
+                        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descController,
+                      maxLines: 4,
+                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
+                      decoration: const InputDecoration(
+                        labelText: "Describe your issue",
+                        labelStyle: TextStyle(color: Colors.grey),
+                        alignLabelWithHint: true,
+                        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting ? null : () => Navigator.pop(context),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          final title = titleController.text.trim();
+                          final desc = descController.text.trim();
+                          if (title.isEmpty || desc.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Please fill in all fields'), backgroundColor: Colors.redAccent),
+                            );
+                            return;
+                          }
+                          setDialogState(() => isSubmitting = true);
+                          try {
+                            final res = await ApiService.submitSupportTicket(title, desc);
+                            if (res['success'] == true) {
+                              if (mounted) {
+                                Navigator.pop(context);
+                                _showActionDialog("Ticket Submitted", "Your ticket has been logged successfully. Ticket ID: ${res['data']?['report_id']?.toString().substring(0, 8) ?? 'ST-9912'}\nOur team will contact you shortly.");
+                              }
+                            } else {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(res['message'] ?? 'Failed to raise support ticket'), backgroundColor: Colors.redAccent),
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
+                              );
+                            }
+                          } finally {
+                            setDialogState(() => isSubmitting = false);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
+                  child: isSubmitting
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text("Submit Ticket", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _launchWhatsAppSupport() {
+    final number = _systemSettings['supportWhatsapp'] ?? "9427961426";
+    launchUrl(Uri.parse("https://wa.me/$number"));
+  }
+
+  void _launchCallSupport() {
+    final number = _systemSettings['supportPhone'] ?? "9427961426";
+    launchUrl(Uri.parse("tel:$number"));
+  }
+
+  void _showLiveChatDialog() {
+    final List<Map<String, String>> chatMessages = [
+      {'sender': 'bot', 'text': 'Hello! Thanks for contacting Athlete POV Partner Support. How can we help you today?'}
+    ];
+    final chatController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 14,
+                    backgroundColor: AppColors.pink.withOpacity(0.12),
+                    child: const Icon(Icons.support_agent_rounded, size: 16, color: AppColors.pink),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text("Live Support Chat", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+              content: SizedBox(
+                width: 320,
+                height: 400,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: chatMessages.length,
+                        itemBuilder: (context, index) {
+                          final msg = chatMessages[index];
+                          final isBot = msg['sender'] == 'bot';
+                          return Align(
+                            alignment: isBot ? Alignment.centerLeft : Alignment.centerRight,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: isBot
+                                    ? (isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04))
+                                    : AppColors.pink.withOpacity(0.15),
+                                borderRadius: BorderRadius.only(
+                                  topLeft: const Radius.circular(12),
+                                  topRight: const Radius.circular(12),
+                                  bottomLeft: isBot ? Radius.zero : const Radius.circular(12),
+                                  bottomRight: isBot ? const Radius.circular(12) : Radius.zero,
+                                ),
+                              ),
+                              child: Text(
+                                msg['text']!,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark ? Colors.white : const Color(0xFF1A1A1A),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const Divider(color: Colors.white10, height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: chatController,
+                            style: TextStyle(fontSize: 12, color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
+                            decoration: const InputDecoration(
+                              hintText: "Type your message...",
+                              hintStyle: TextStyle(color: Colors.grey),
+                              border: InputBorder.none,
+                            ),
+                            onSubmitted: (value) {
+                              if (value.trim().isEmpty) return;
+                              final text = value.trim();
+                              chatController.clear();
+                              setDialogState(() {
+                                chatMessages.add({'sender': 'user', 'text': text});
+                              });
+                              
+                              // Trigger bot response logic
+                              Future.delayed(const Duration(seconds: 1), () {
+                                String reply = "I'm connecting you with a support representative. Please hold on...";
+                                final txt = text.toLowerCase();
+                                if (txt.contains('payment') || txt.contains('settle') || txt.contains('earnings')) {
+                                  reply = "For payment and settlement inquiries, note that weekly payouts process automatically on Tuesdays. You can view settlements status under Settlements.";
+                                } else if (txt.contains('kyc') || txt.contains('doc') || txt.contains('verification')) {
+                                  reply = "KYC approvals are processed within 24-48 business hours. Ensure your GST and PAN documents are clearly visible in the preview.";
+                                } else if (txt.contains('venue') || txt.contains('court') || txt.contains('add')) {
+                                  reply = "To add or update sports venues, tap Venues -> Add Venue. Changes are typically approved in less than 24 hours.";
+                                } else if (txt.contains('hello') || txt.contains('hi')) {
+                                  reply = "Hello! How can we assist you with Athlete POV Partner platform today?";
+                                }
+                                setDialogState(() {
+                                  chatMessages.add({'sender': 'bot', 'text': reply});
+                                });
+                              });
+                            },
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.send_rounded, color: AppColors.pink, size: 20),
+                          onPressed: () {
+                            final text = chatController.text.trim();
+                            if (text.isEmpty) return;
+                            chatController.clear();
+                            setDialogState(() {
+                              chatMessages.add({'sender': 'user', 'text': text});
+                            });
+                            
+                            Future.delayed(const Duration(seconds: 1), () {
+                              String reply = "I'm connecting you with a support representative. Please hold on...";
+                              final txt = text.toLowerCase();
+                              if (txt.contains('payment') || txt.contains('settle') || txt.contains('earnings')) {
+                                reply = "For payment and settlement inquiries, note that weekly payouts process automatically on Tuesdays. You can view settlements status under Settlements.";
+                              } else if (txt.contains('kyc') || txt.contains('doc') || txt.contains('verification')) {
+                                reply = "KYC approvals are processed within 24-48 business hours. Ensure your GST and PAN documents are clearly visible in the preview.";
+                              } else if (txt.contains('venue') || txt.contains('court') || txt.contains('add')) {
+                                reply = "To add or update sports venues, tap Venues -> Add Venue. Changes are typically approved in less than 24 hours.";
+                              } else if (txt.contains('hello') || txt.contains('hi')) {
+                                reply = "Hello! How can we assist you with Athlete POV Partner platform today?";
+                              }
+                              setDialogState(() {
+                                chatMessages.add({'sender': 'bot', 'text': reply});
+                              });
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("End Chat", style: TextStyle(color: Colors.grey)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _logout() async {
     await ApiService.clearToken();
     if (!mounted) return;
@@ -4083,13 +6307,26 @@ class _ProfileTabState extends State<ProfileTab> {
         elevation: 0,
         backgroundColor: Colors.transparent,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          _loadProfile();
+          await Future.delayed(const Duration(milliseconds: 600));
+        },
+        color: AppColors.pink,
+        child: (_isLoading && _profile.isEmpty)
+            ? const Center(child: CircularProgressIndicator(color: AppColors.pink))
+            : SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (_isLoading && _profile.isNotEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12.0),
+                      child: LinearProgressIndicator(color: AppColors.pink, backgroundColor: Colors.transparent),
+                    ),
+
                   // Profile Header & Level Indicator
                   _buildProfileHeader(isDark, textColor, secondaryTextColor),
                   const SizedBox(height: 20),
@@ -4148,6 +6385,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 ],
               ),
             ),
+      ),
     );
   }
 
@@ -4159,26 +6397,37 @@ class _ProfileTabState extends State<ProfileTab> {
         : (_profile['email'] != null ? _profile['email'].split('@')[0].toUpperCase() : 'Sunset Sports Arena');
 
     final kycStatus = _profile['kyc_status'] ?? 'unverified';
-    final progressVal = kycStatus == 'verified' ? 1.0 : (kycStatus == 'pending' ? 0.75 : 0.25);
-    final progressPct = kycStatus == 'verified' ? "100%" : (kycStatus == 'pending' ? "75%" : "25%");
+    final bool isVerified = kycStatus == 'verified';
+    final bool isPending = kycStatus == 'pending';
+    final int completedCount = 1 + (isVerified || isPending ? 1 : 0) + (isVerified ? 1 : 0) + (isVerified ? 1 : 0);
+    final double progressVal = completedCount / 4.0;
+    final String progressPct = "${(progressVal * 100).toInt()}%";
 
-    final earnings = double.tryParse(_profile['total_earnings']?.toString() ?? '0') ?? 0.0;
+    final String planTier = (_profile['plan_tier'] as String? ?? 'free').toLowerCase();
     String tier = "Bronze Partner";
     String badge = "🥉";
-    if (earnings >= 100000) {
+    if (planTier == 'enterprise') {
       tier = "Platinum Partner";
       badge = "💎";
-    } else if (earnings >= 50000) {
+    } else if (planTier == 'premium') {
       tier = "Gold Partner";
       badge = "🥇";
-    } else if (earnings >= 10000) {
-      tier = "Silver Partner";
-      badge = "🥈";
+    } else {
+      tier = "Bronze Partner";
+      badge = "🥉";
     }
 
     final createdYear = _profile['created_at'] != null 
         ? DateTime.parse(_profile['created_at']).year.toString() 
         : "2025";
+
+    String? avatarUrl = _profile['avatar_url'];
+    if (avatarUrl != null && avatarUrl.isNotEmpty) {
+      if (avatarUrl.startsWith('/uploads')) {
+        final serverBase = ApiService.activeUrl.replaceAll('/api', '');
+        avatarUrl = '$serverBase$avatarUrl';
+      }
+    }
 
     return GlassContainer(
       radius: 24,
@@ -4187,26 +6436,35 @@ class _ProfileTabState extends State<ProfileTab> {
         children: [
           Row(
             children: [
-              Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 36,
-                    backgroundColor: AppColors.pink.withOpacity(0.2),
-                    child: const Icon(Icons.person, size: 36, color: AppColors.pink),
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: AppColors.pink,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.camera_alt, size: 12, color: Colors.white),
+              GestureDetector(
+                onTap: _showChangePhotoUpload,
+                behavior: HitTestBehavior.opaque,
+                child: Stack(
+                  children: [
+                    CircleAvatar(
+                      radius: 36,
+                      backgroundColor: AppColors.pink.withOpacity(0.2),
+                      backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
+                          ? NetworkImage(avatarUrl)
+                          : null,
+                      child: avatarUrl != null && avatarUrl.isNotEmpty
+                          ? null
+                          : const Icon(Icons.person, size: 36, color: AppColors.pink),
                     ),
-                  ),
-                ],
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: AppColors.pink,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.camera_alt, size: 12, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -4286,8 +6544,8 @@ class _ProfileTabState extends State<ProfileTab> {
 
   Widget _buildPartnerCard(bool isDark, Color textColor, Color secondaryTextColor) {
     final String businessName = _profile['venues'] != null && (_profile['venues'] as List).isNotEmpty
-        ? _profile['venues'][0]['name']
-        : 'Sunset Sports Arena';
+        ? (_profile['venues'][0]['name'] ?? 'n/a')
+        : 'n/a';
 
     return GlassContainer(
       radius: 20,
@@ -4319,7 +6577,7 @@ class _ProfileTabState extends State<ProfileTab> {
           const SizedBox(height: 12),
           _buildInfoRow(Icons.email, _profile['email'] ?? "partner@email.com", textColor),
           const SizedBox(height: 12),
-          _buildInfoRow(Icons.location_on, "Madhupura, Gujarat", textColor),
+          _buildInfoRow(Icons.location_on, _profile['venues'] != null && (_profile['venues'] as List).isNotEmpty ? (_profile['venues'][0]['address'] ?? 'n/a') : 'n/a', textColor),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -4337,7 +6595,7 @@ class _ProfileTabState extends State<ProfileTab> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: () => _showActionDialog("Change Photo", "Upload actions are disabled in demo mode."),
+                  onPressed: _showChangePhotoUpload,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.pink,
                     foregroundColor: Colors.white,
@@ -4355,15 +6613,34 @@ class _ProfileTabState extends State<ProfileTab> {
 
   Widget _buildBusinessCard(bool isDark, Color textColor, Color secondaryTextColor) {
     final String businessName = _profile['venues'] != null && (_profile['venues'] as List).isNotEmpty
-        ? _profile['venues'][0]['name']
-        : 'Sunset Sports Arena';
+        ? (_profile['venues'][0]['name'] ?? 'n/a')
+        : 'n/a';
 
-    final createdYear = _profile['created_at'] != null 
-        ? DateTime.parse(_profile['created_at']).year.toString() 
-        : "2025";
+    final createdDate = _profile['created_at'] != null 
+        ? DateTime.tryParse(_profile['created_at']) 
+        : null;
+    final List<String> months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    final String memberSinceDate = createdDate != null 
+        ? "${months[createdDate.month - 1]} ${createdDate.year}" 
+        : "Jan 2026";
 
-    final kycStatus = _profile['kyc_status'] ?? 'unverified';
-    final hasVerifiedDocs = kycStatus == 'verified';
+
+    final documents = _profile['partner_documents'] as List<dynamic>? ?? [];
+    final gstDoc = documents.firstWhere((d) => d['document_type'] == 'gst_certificate', orElse: () => null);
+    final panDoc = documents.firstWhere((d) => d['document_type'] == 'pan_card', orElse: () => null);
+    final aadhaarDoc = documents.firstWhere((d) => d['document_type'] == 'ownership_proof', orElse: () => null);
+
+    final String gstVal = _profile['gst_number'] ?? (gstDoc != null 
+        ? (gstDoc['status'] == 'verified' ? "24ABCDE1234F1Z5" : "Verification ${gstDoc['status']}") 
+        : "not avl");
+
+    final String panVal = _profile['pan_number'] ?? (panDoc != null 
+        ? (panDoc['status'] == 'verified' ? "ABCDE1234F" : "Verification ${panDoc['status']}") 
+        : "not avl");
+
+    final String aadhaarVal = _profile['aadhaar_number'] ?? (aadhaarDoc != null 
+        ? (aadhaarDoc['status'] == 'verified' ? "123456789012" : "Verification ${aadhaarDoc['status']}") 
+        : "not avl");
 
     return GlassContainer(
       radius: 20,
@@ -4374,11 +6651,13 @@ class _ProfileTabState extends State<ProfileTab> {
           Text("BUSINESS INFORMATION", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
           const SizedBox(height: 16),
           _buildDetailTile("Venue Name", businessName, secondaryTextColor, textColor),
-          _buildDetailTile("Business Type", "Sports Complex", secondaryTextColor, textColor),
-          _buildDetailTile("GST Number", hasVerifiedDocs ? "24ABCDE1234F1Z5" : "Pending Verification", secondaryTextColor, textColor),
-          _buildDetailTile("PAN Number", hasVerifiedDocs ? "ABCDE1234F" : "Pending Verification", secondaryTextColor, textColor),
-          _buildDetailTile("Owner Name", "Rajesh Sharma", secondaryTextColor, textColor),
-          _buildDetailTile("Member Since", "Jan $createdYear", secondaryTextColor, textColor),
+          _buildDetailTile("Business Type", _profile['venues'] != null && (_profile['venues'] as List).isNotEmpty && (_profile['venues'][0]['sport_types'] as List).isNotEmpty ? ((_profile['venues'][0]['sport_types'] as List).join(' & ') + ' Complex') : 'n/a', secondaryTextColor, textColor),
+          _buildDetailTile("GST Number", gstVal, secondaryTextColor, textColor),
+          _buildDetailTile("PAN Number", panVal, secondaryTextColor, textColor),
+          _buildDetailTile("Aadhaar Number", aadhaarVal, secondaryTextColor, textColor),
+          _buildDetailTile("Owner Name", _profile['email'] != null ? _profile['email'].split('@')[0].replaceAll(RegExp(r'[0-9]'), '').toUpperCase() : 'RAJESH SHARMA', secondaryTextColor, textColor),
+          _buildDetailTile("Plan Tier", (_profile['plan_tier'] ?? 'free').toUpperCase(), secondaryTextColor, textColor),
+          _buildDetailTile("Member Since", memberSinceDate, secondaryTextColor, textColor),
         ],
       ),
     );
@@ -4389,11 +6668,32 @@ class _ProfileTabState extends State<ProfileTab> {
     final isVerified = kycStatus == 'verified';
     final isPending = kycStatus == 'pending';
 
+    final documents = _profile['partner_documents'] as List<dynamic>? ?? [];
+    bool isDocVerified(String docType) {
+      final doc = documents.firstWhere((d) => d['document_type'] == docType, orElse: () => null);
+      if (doc == null) return false;
+      final status = (doc['status'] as String).toLowerCase();
+      return status == 'verified' || status == 'approved';
+    }
+
+    final bool isAadhaarCheck = isDocVerified('ownership_proof');
+    final bool isPanCheck = isDocVerified('pan_card');
+    final bool isGstCheck = isDocVerified('gst_certificate');
+    final bool isBankCheck = isDocVerified('cancelled_cheque');
+
+    int completedCount = 0;
+    if (isAadhaarCheck) completedCount++;
+    if (isPanCheck) completedCount++;
+    if (isGstCheck) completedCount++;
+    if (isBankCheck) completedCount++;
+
+    final String progressPct = "${(completedCount / 4.0 * 100).toInt()}%";
+
     final String kycMsg = isVerified
-        ? "All documents are approved. Profile verification is 100% complete."
+        ? "All documents are approved. Profile verification is $progressPct complete."
         : (isPending
-            ? "Verification is in progress (75% Complete). GST and Bank verification pending."
-            : "Verification is incomplete (25% Complete). Please submit your KYC documents.");
+            ? "Verification is in progress ($progressPct Complete). GST and Bank verification pending."
+            : "Verification is incomplete ($progressPct Complete). Please submit your KYC documents.");
 
     return GlassContainer(
       radius: 20,
@@ -4408,7 +6708,9 @@ class _ProfileTabState extends State<ProfileTab> {
               Text(
                 "Overall: ${kycStatus.toUpperCase()}", 
                 style: TextStyle(
-                  color: isVerified ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A), 
+                  color: isVerified 
+                      ? const Color(0xFF3DDC84) 
+                      : (isPending ? const Color(0xFFFFB03A) : Colors.redAccent), 
                   fontSize: 12, 
                   fontWeight: FontWeight.bold
                 )
@@ -4419,10 +6721,10 @@ class _ProfileTabState extends State<ProfileTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _buildKycCheckItem("Aadhaar", true),
-              _buildKycCheckItem("PAN", isVerified || isPending),
-              _buildKycCheckItem("GST", isVerified),
-              _buildKycCheckItem("Bank", isVerified),
+              _buildKycCheckItem("Aadhaar", isAadhaarCheck),
+              _buildKycCheckItem("PAN", isPanCheck),
+              _buildKycCheckItem("GST", isGstCheck),
+              _buildKycCheckItem("Bank", isBankCheck),
             ],
           ),
           const SizedBox(height: 16),
@@ -4456,8 +6758,29 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Widget _buildBankDetailsCard(bool isDark, Color textColor, Color secondaryTextColor) {
-    final kycStatus = _profile['kyc_status'] ?? 'unverified';
-    final hasVerifiedDocs = kycStatus == 'verified';
+    final bankStatus = _profile['bank_status'] ?? 'unverified';
+    final bankName = _profile['bank_name'] ?? '';
+    final bankAccountNo = _profile['bank_account_no'] ?? '';
+    final bankIfsc = _profile['bank_ifsc'] ?? '';
+    
+    final bool hasBank = bankAccountNo.isNotEmpty;
+    
+    String displayAcc = "Account: not avl";
+    if (hasBank) {
+      displayAcc = bankAccountNo.length > 4 
+          ? "Account: XXXXXXXX${bankAccountNo.substring(bankAccountNo.length - 4)}"
+          : "Account: $bankAccountNo";
+    }
+
+    Color badgeColor = Colors.redAccent;
+    String badgeText = "Incomplete";
+    if (bankStatus == 'approved') {
+      badgeColor = const Color(0xFF3DDC84);
+      badgeText = "Primary";
+    } else if (bankStatus == 'pending') {
+      badgeColor = Colors.amber;
+      badgeText = "Pending Review";
+    }
 
     return GlassContainer(
       radius: 20,
@@ -4471,7 +6794,7 @@ class _ProfileTabState extends State<ProfileTab> {
               Text("BANK ACCOUNT DETAILS", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
               IconButton(
                 icon: const Icon(Icons.edit, size: 16, color: AppColors.pink),
-                onPressed: () => _showActionDialog("Edit Bank Details", "Bank editing requires admin approvals."),
+                onPressed: _showBankEditDialog,
               ),
             ],
           ),
@@ -4491,10 +6814,10 @@ class _ProfileTabState extends State<ProfileTab> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("HDFC Bank", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: textColor)),
+                    Text(hasBank ? bankName : "not avl", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: textColor)),
                     const SizedBox(height: 2),
                     Text(
-                      hasVerifiedDocs ? "Account: XXXXXXXX4382" : "Account: Pending Verification", 
+                      displayAcc, 
                       style: TextStyle(color: secondaryTextColor, fontSize: 13)
                     ),
                   ],
@@ -4503,17 +6826,196 @@ class _ProfileTabState extends State<ProfileTab> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF3DDC84).withOpacity(0.12),
+                  color: badgeColor.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Text("Primary", style: TextStyle(color: Color(0xFF3DDC84), fontSize: 10, fontWeight: FontWeight.bold)),
+                child: Text(
+                  badgeText, 
+                  style: TextStyle(
+                    color: badgeColor, 
+                    fontSize: 10, 
+                    fontWeight: FontWeight.bold
+                  )
+                ),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          _buildDetailTile("IFSC Code", hasVerifiedDocs ? "HDFC0001234" : "Pending", secondaryTextColor, textColor),
+          _buildDetailTile("IFSC Code", hasBank ? bankIfsc : "not avl", secondaryTextColor, textColor),
+          if (bankStatus == 'pending') ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: const [
+                  Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 14),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      "Your edit is pending admin review. The original details remain active.",
+                      style: TextStyle(color: Colors.amber, fontSize: 10),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
+    );
+  }
+
+  void _showBankEditDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    final currentBankName = _profile['bank_name'] ?? '';
+    final currentBankAccountNo = _profile['bank_account_no'] ?? '';
+    final currentBankIfsc = _profile['bank_ifsc'] ?? '';
+    
+    final bankNameController = TextEditingController(text: currentBankName);
+    final bankAccountController = TextEditingController(text: currentBankAccountNo);
+    final bankIfscController = TextEditingController(text: currentBankIfsc);
+    
+    final isFirstTime = currentBankAccountNo.isEmpty;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            isFirstTime ? "Add Bank Details" : "Edit Bank Details",
+            style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!isFirstTime) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    margin: const EdgeInsets.only(bottom: 15),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "Updates require admin approval before going live.",
+                            style: TextStyle(color: Colors.amber, fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                TextField(
+                  controller: bankNameController,
+                  style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                  decoration: InputDecoration(
+                    labelText: "Bank Name",
+                    labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+                    hintText: "E.g., HDFC Bank",
+                    hintStyle: TextStyle(color: isDark ? Colors.white30 : Colors.black38),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: bankAccountController,
+                  style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                  decoration: InputDecoration(
+                    labelText: "Account Number",
+                    labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+                    hintText: "E.g., 5010012345678",
+                    hintStyle: TextStyle(color: isDark ? Colors.white30 : Colors.black38),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: bankIfscController,
+                  style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                  decoration: InputDecoration(
+                    labelText: "IFSC Code",
+                    labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+                    hintText: "E.g., HDFC0000123",
+                    hintStyle: TextStyle(color: isDark ? Colors.white30 : Colors.black38),
+                  ),
+                  textCapitalization: TextCapitalization.characters,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: Text("Cancel", style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final name = bankNameController.text.trim();
+                final acc = bankAccountController.text.trim();
+                final ifsc = bankIfscController.text.trim();
+                
+                if (name.isEmpty || acc.isEmpty || ifsc.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("All fields are required.")),
+                  );
+                  return;
+                }
+                
+                Navigator.pop(dialogCtx); // Close input fields
+                
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (spinnerCtx) => const Center(child: CircularProgressIndicator(color: AppColors.pink)),
+                );
+                
+                final response = await ApiService.updateProfile(
+                  bankName: name,
+                  bankAccountNo: acc,
+                  bankIfsc: ifsc,
+                );
+                
+                if (context.mounted) {
+                  Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+                }
+                
+                if (response['success'] == true) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        isFirstTime 
+                            ? "Bank account saved successfully!" 
+                            : "Changes submitted for admin approval."
+                      ),
+                    ),
+                  );
+                  _loadProfile();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(response['message'] ?? 'Failed to update bank details.')),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -4596,8 +7098,30 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Widget _buildDocumentsCard(bool isDark, Color textColor, Color secondaryTextColor) {
-    final kycStatus = _profile['kyc_status'] ?? 'unverified';
-    final hasVerifiedDocs = kycStatus == 'verified';
+    final documents = _profile['partner_documents'] as List<dynamic>? ?? [];
+
+    String getDocStatus(String docType) {
+      final doc = documents.firstWhere((d) => d['document_type'] == docType, orElse: () => null);
+      if (doc == null) return "NOT UPLOADED";
+      return (doc['status'] as String).toUpperCase();
+    }
+
+    Color getStatusColor(String status) {
+      if (status == "APPROVED" || status == "VERIFIED" || status == "SIGNED") {
+        return const Color(0xFF3DDC84);
+      } else if (status == "PENDING" || status == "PENDING SIGNATURE") {
+        return const Color(0xFFFFB03A);
+      } else if (status == "REJECTED") {
+        return Colors.redAccent;
+      }
+      return Colors.grey;
+    }
+
+    final gstStatus = getDocStatus('gst_certificate');
+    final panStatus = getDocStatus('pan_card');
+    final licenseStatus = getDocStatus('ownership_proof');
+    final chequeStatus = getDocStatus('cancelled_cheque');
+    final agreementStatus = getDocStatus('agreement');
 
     return GlassContainer(
       radius: 20,
@@ -4610,17 +7134,17 @@ class _ProfileTabState extends State<ProfileTab> {
             children: [
               Text("DOCUMENTS", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
               GestureDetector(
-                onTap: () => _showActionDialog("View All Documents", "Demo mode: Viewing all mock files."),
+                onTap: _showViewAllDocumentsDialog,
                 child: const Text("View All", style: TextStyle(color: AppColors.pink, fontSize: 12, fontWeight: FontWeight.bold)),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          _buildDocRow("GST Certificate", hasVerifiedDocs ? "APPROVED" : "PENDING", textColor, hasVerifiedDocs ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A)),
-          _buildDocRow("PAN Card", hasVerifiedDocs ? "APPROVED" : "PENDING", textColor, hasVerifiedDocs ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A)),
-          _buildDocRow("Business License", hasVerifiedDocs ? "APPROVED" : "PENDING", textColor, hasVerifiedDocs ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A)),
-          _buildDocRow("Cancelled Cheque", hasVerifiedDocs ? "APPROVED" : "PENDING", textColor, hasVerifiedDocs ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A)),
-          _buildDocRow("Agreement", hasVerifiedDocs ? "SIGNED" : "PENDING SIGNATURE", textColor, hasVerifiedDocs ? AppColors.pink : const Color(0xFFFFB03A)),
+          _buildDocRow("GST Certificate", "gst_certificate", gstStatus, textColor, getStatusColor(gstStatus)),
+          _buildDocRow("PAN Card", "pan_card", panStatus, textColor, getStatusColor(panStatus)),
+          _buildDocRow("Aadhaar Card", "ownership_proof", licenseStatus, textColor, getStatusColor(licenseStatus)),
+          _buildDocRow("Cancelled Cheque", "cancelled_cheque", chequeStatus, textColor, getStatusColor(chequeStatus)),
+          _buildDocRow("Agreement", "agreement", agreementStatus, textColor, getStatusColor(agreementStatus)),
         ],
       ),
     );
@@ -4635,20 +7159,28 @@ class _ProfileTabState extends State<ProfileTab> {
         children: [
           Text("NOTIFICATION PREFERENCES", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
           const SizedBox(height: 12),
-          _buildSwitchRow("Booking Alerts", "Receive instant notifications for bookings", _bookingAlerts, (val) {
+          _buildSwitchRow("Booking Alerts", "Receive instant notifications for bookings", _bookingAlerts, (val) async {
             setState(() => _bookingAlerts = val);
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('booking_alerts', val);
           }, textColor, secondaryTextColor),
           const SizedBox(height: 8),
-          _buildSwitchRow("Payments", "Alerts for settlements and payouts", _paymentsAlerts, (val) {
+          _buildSwitchRow("Payments", "Alerts for settlements and payouts", _paymentsAlerts, (val) async {
             setState(() => _paymentsAlerts = val);
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('payments_alerts', val);
           }, textColor, secondaryTextColor),
           const SizedBox(height: 8),
-          _buildSwitchRow("Promotions", "Newsletters and partner campaigns", _promotionsAlerts, (val) {
+          _buildSwitchRow("Promotions", "Newsletters and partner campaigns", _promotionsAlerts, (val) async {
             setState(() => _promotionsAlerts = val);
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('promotions_alerts', val);
           }, textColor, secondaryTextColor),
           const SizedBox(height: 8),
-          _buildSwitchRow("Email Updates", "Receive weekly reporting emails", _emailUpdates, (val) {
+          _buildSwitchRow("Email Updates", "Receive weekly reporting emails", _emailUpdates, (val) async {
             setState(() => _emailUpdates = val);
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('email_updates', val);
           }, textColor, secondaryTextColor),
         ],
       ),
@@ -4665,18 +7197,18 @@ class _ProfileTabState extends State<ProfileTab> {
           Text("SECURITY SETTINGS", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
           const SizedBox(height: 12),
           _buildSettingsActionTile(Icons.lock_reset_rounded, "Change Password", () {
-            _showActionDialog("Change Password", "A reset link has been dispatched to your email.");
+            _showActionDialog("Passwordless Account", "Your partner account uses secure, passwordless OTP (One-Time Password) verification via your registered phone number. A password is not required to log in. You can configure Two-Factor Authentication below.");
           }, textColor, secondaryTextColor),
-          _buildSettingsActionTile(Icons.phone_iphone_rounded, "Change Mobile", () {
-            _showActionDialog("Change Mobile", "Redirecting to verification process...");
-          }, textColor, secondaryTextColor),
-          _buildSwitchRow("Two-Factor Authentication", "Secure account access via OTP tokens", _twoFactorEnabled, (val) {
+          _buildSettingsActionTile(Icons.phone_iphone_rounded, "Change Mobile", _showChangeMobileDialog, textColor, secondaryTextColor),
+          _buildSwitchRow("Two-Factor Authentication", "Secure account access via OTP tokens", _twoFactorEnabled, (val) async {
             setState(() => _twoFactorEnabled = val);
-            _showActionDialog("Two-Factor Auth", val ? "Two-Factor Auth has been enabled." : "Two-Factor Auth has been disabled.");
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('two_factor_enabled', val);
+            if (mounted) {
+              _showActionDialog("Two-Factor Auth", val ? "Two-Factor Auth has been enabled." : "Two-Factor Auth has been disabled.");
+            }
           }, textColor, secondaryTextColor),
-          _buildSettingsActionTile(Icons.devices_rounded, "Manage Devices", () {
-            _showActionDialog("Active Devices", "Current Device: Android Emulator (Active)\nNo other sessions detected.");
-          }, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.devices_rounded, "Manage Devices", _showManageDevicesDialog, textColor, secondaryTextColor),
         ],
       ),
     );
@@ -4691,18 +7223,12 @@ class _ProfileTabState extends State<ProfileTab> {
         children: [
           Text("HELP & SUPPORT", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
           const SizedBox(height: 12),
-          _buildSettingsActionTile(Icons.help_outline_rounded, "Help Center / FAQs", () {
-            _showActionDialog("Help Center", "Opening support documentation website...");
-          }, textColor, secondaryTextColor),
-          _buildSettingsActionTile(Icons.support_agent_rounded, "Contact Support", () {
-            _showActionDialog("Contact Support", "Call 1800-ATHLETE (284-5383) for immediate assistance.");
-          }, textColor, secondaryTextColor),
-          _buildSettingsActionTile(Icons.assignment_turned_in_rounded, "Raise Ticket", () {
-            _showActionDialog("Raise Support Ticket", "Opening ticket portal form...");
-          }, textColor, secondaryTextColor),
-          _buildSettingsActionTile(Icons.chat_bubble_outline_rounded, "Live Chat", () {
-            _showActionDialog("Live Support Chat", "Connecting to a live agent. Please wait...");
-          }, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.help_outline_rounded, "Help Center / FAQs", _showHelpCenterDialog, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.support_agent_rounded, "Contact Support", _showContactSupportDialog, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.assignment_turned_in_rounded, "Raise Ticket", _showRaiseTicketDialog, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.chat_bubble_outline_rounded, "Live Chat", _showLiveChatDialog, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.phone_iphone_rounded, "WhatsApp Support", _launchWhatsAppSupport, textColor, secondaryTextColor),
+          _buildSettingsActionTile(Icons.phone_rounded, "Call Support", _launchCallSupport, textColor, secondaryTextColor),
         ],
       ),
     );
@@ -4731,19 +7257,22 @@ class _ProfileTabState extends State<ProfileTab> {
             _showActionDialog("Select Language", "Available Languages:\n- English (Active)\n- Gujarati\n- Hindi");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.description_outlined, "Privacy Policy", () {
-            _showActionDialog("Privacy Policy", "Opening partner privacy policy details...");
+            _showWebViewDialog("Privacy Policy", _systemSettings['privacyPolicyUrl'] ?? "https://athletepov.com/privacy-policy");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.gavel_rounded, "Terms of Service", () {
-            _showActionDialog("Terms of Service", "Opening terms agreement...");
+            _showWebViewDialog("Terms of Service", _systemSettings['termsOfServiceUrl'] ?? "https://athletepov.com/terms-of-service");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.star_outline_rounded, "Rate App", () {
-            _showActionDialog("Rate App", "Opening Play Store rating dialog...");
+            final String playStoreUrl = _systemSettings['playStoreUrl'] ?? "https://play.google.com/store/apps/details?id=com.athletepov.partner";
+            final String appStoreUrl = _systemSettings['appStoreUrl'] ?? "https://apps.apple.com/app/athletepov-partner/id123456789";
+            final String targetUrl = (!kIsWeb && Platform.isIOS) ? appStoreUrl : playStoreUrl;
+            launchUrl(Uri.parse(targetUrl));
           }, textColor, secondaryTextColor),
           const SizedBox(height: 8),
           const Divider(color: Colors.white10),
           const SizedBox(height: 8),
           Center(
-            child: Text("App Version: v1.0.24 (Partner)", style: TextStyle(color: secondaryTextColor, fontSize: 11)),
+            child: Text("App Version: v${_systemSettings['partnerAppVersion'] ?? '1.0.24'} (Partner)", style: TextStyle(color: secondaryTextColor, fontSize: 11)),
           )
         ],
       ),
@@ -4770,42 +7299,88 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
+
   Widget _buildDeleteAccountButton(Color textColor) {
-    return TextButton(
-      onPressed: () {
-        showDialog(
-          context: context,
-          builder: (context) {
-            final isDark = Theme.of(context).brightness == Brightness.dark;
-            return AlertDialog(
-              backgroundColor: isDark ? AppColors.surface : Colors.white,
-              title: const Text("Delete Account", style: TextStyle(color: Colors.redAccent)),
-              content: const Text(
-                "Warning: This action is permanent and all associated venues, slots, and balance data will be immediately removed.",
-                style: TextStyle(color: Colors.redAccent),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text("Cancel", style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+    return GlassContainer(
+      radius: 20,
+      padding: const EdgeInsets.all(8),
+      border: Border.all(color: Colors.redAccent.withOpacity(0.15)),
+      gradient: LinearGradient(
+        colors: [
+          Colors.redAccent.withOpacity(0.04),
+          Colors.redAccent.withOpacity(0.01),
+        ],
+      ),
+      child: ListTile(
+        leading: const Icon(Icons.delete_forever_rounded, color: Colors.redAccent),
+        title: const Text("Delete Partner Account", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+        subtitle: const Text("Permanently remove all venues and slots data", style: TextStyle(color: Colors.redAccent, fontSize: 11)),
+        trailing: const Icon(Icons.chevron_right_rounded, color: Colors.redAccent),
+        onTap: () {
+          showDialog(
+            context: context,
+            builder: (context) {
+              final isDark = Theme.of(context).brightness == Brightness.dark;
+              return AlertDialog(
+                backgroundColor: isDark ? AppColors.surface : Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                title: const Text("Delete Account", style: TextStyle(color: Colors.redAccent)),
+                content: const Text(
+                  "Warning: This action is permanent and all associated venues, slots, and balance data will be immediately removed.",
+                  style: TextStyle(color: Colors.redAccent),
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _showActionDialog("Account Deleted", "Your request to delete partner account is submitted to admin approvals.");
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-                  child: const Text("Confirm Delete", style: TextStyle(color: Colors.white)),
-                )
-              ],
-            );
-          },
-        );
-      },
-      child: const Text(
-        "Delete Partner Account",
-        textAlign: TextAlign.center,
-        style: TextStyle(color: Colors.redAccent, fontSize: 12, decoration: TextDecoration.underline),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text("Cancel", style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+                  ),
+                  ElevatedButton(
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      
+                      showDialog(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (context) => const Center(child: CircularProgressIndicator(color: AppColors.pink)),
+                      );
+                      
+                      final response = await ApiService.deleteProfile();
+                      
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                      }
+                      
+                      if (response['success'] == true) {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.remove('token');
+                        
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Your account has been deleted successfully.')),
+                          );
+                          Navigator.of(context).pushAndRemoveUntil(
+                            MaterialPageRoute(
+                              builder: (context) => LoginScreen(toggleTheme: widget.toggleTheme),
+                            ),
+                            (route) => false,
+                          );
+                        }
+                      } else {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(response['message'] ?? 'Failed to delete account')),
+                          );
+                        }
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    child: const Text("Confirm Delete", style: TextStyle(color: Colors.white)),
+                  )
+                ],
+              );
+            },
+          );
+        },
       ),
     );
   }
@@ -4841,12 +7416,14 @@ class _ProfileTabState extends State<ProfileTab> {
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF3DDC84).withOpacity(isChecked ? 0.12 : 0.04),
+            color: isChecked 
+                ? const Color(0xFF3DDC84).withOpacity(0.12)
+                : Colors.redAccent.withOpacity(0.12),
             shape: BoxShape.circle,
           ),
           child: Icon(
             isChecked ? Icons.check_rounded : Icons.close_rounded,
-            color: isChecked ? const Color(0xFF3DDC84) : Colors.grey,
+            color: isChecked ? const Color(0xFF3DDC84) : Colors.redAccent,
             size: 16,
           ),
         ),
@@ -4896,22 +7473,92 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  Widget _buildDocRow(String name, String status, Color textColor, Color statusColor) {
+  Widget _buildDocRow(String name, String docType, String status, Color textColor, Color statusColor) {
+    final bool canUpload = status != "APPROVED";
+    final bool isUploaded = status != "NOT UPLOADED";
+
+    final documents = _profile['partner_documents'] as List<dynamic>? ?? [];
+    final doc = documents.firstWhere((d) => d['document_type'] == docType, orElse: () => null);
+    final String fileUrl = doc != null ? (doc['file_url'] as String? ?? '') : '';
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
       child: Row(
         children: [
-          const Icon(Icons.insert_drive_file_outlined, size: 18, color: AppColors.pink),
-          const SizedBox(width: 12),
-          Expanded(child: Text(name, style: TextStyle(color: textColor, fontSize: 13))),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(6),
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                if (isUploaded && fileUrl.isNotEmpty) {
+                  final isDark = Theme.of(context).brightness == Brightness.dark;
+                  showDialog(
+                    context: context,
+                    builder: (context) {
+                      return AlertDialog(
+                        backgroundColor: isDark ? AppColors.surface : Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        title: Text(name.toUpperCase()),
+                        content: SizedBox(
+                          width: 320,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildDocumentPreview(docType, fileUrl),
+                            ],
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text("Close"),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                } else {
+                  _showDocumentUploadDialog(name, docType);
+                }
+              },
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.insert_drive_file_outlined, 
+                    size: 18, 
+                    color: isUploaded ? AppColors.pink : Colors.grey,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      name, 
+                      style: TextStyle(
+                        color: textColor, 
+                        fontSize: 13,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(status, style: TextStyle(color: statusColor, fontSize: 9, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
             ),
-            child: Text(status, style: TextStyle(color: statusColor, fontSize: 9, fontWeight: FontWeight.bold)),
           ),
+          if (canUpload) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => _showDocumentUploadDialog(name, docType),
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                child: const Icon(Icons.upload_file_rounded, size: 16, color: AppColors.pink),
+              ),
+            ),
+          ],
         ],
       ),
     );

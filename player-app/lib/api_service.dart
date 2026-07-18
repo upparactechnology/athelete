@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
@@ -19,7 +20,7 @@ class ApiService {
         return;
       }
     } catch (_) {}
-    _activeUrl = fallbackUrl;
+    _activeUrl = baseUrl;
   }
 
   static Future<String?> getToken() async {
@@ -49,12 +50,17 @@ class ApiService {
   }
 
   // 1. Authentication
-  static Future<Map<String, dynamic>> requestOtp(String phoneNumber) async {
+  static Future<Map<String, dynamic>> requestOtp(String phoneNumber, {String? password, bool? isSignUp}) async {
     await checkServerUrl();
     final res = await http.post(
       Uri.parse('$_activeUrl/auth/request-otp'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phoneNumber': phoneNumber}),
+      body: jsonEncode({
+        'phoneNumber': phoneNumber,
+        'role': 'user',
+        if (password != null) 'password': password,
+        if (isSignUp != null) 'isSignUp': isSignUp,
+      }),
     );
     return jsonDecode(res.body);
   }
@@ -73,20 +79,96 @@ class ApiService {
     return data;
   }
 
+  static Future<Map<String, dynamic>> googleLogin(String email, String name) async {
+    await checkServerUrl();
+    final res = await http.post(
+      Uri.parse('$_activeUrl/auth/google'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': email,
+        'name': name,
+        'role': 'user',
+      }),
+    );
+    final data = jsonDecode(res.body);
+    if (data['success'] == true && data['data']?['accessToken'] != null) {
+      await setToken(data['data']['accessToken']);
+    }
+    return data;
+  }
+
   // 2. Profile
   static Future<Map<String, dynamic>> getProfile() async {
     final res = await http.get(Uri.parse('$_activeUrl/users/me'), headers: await _headers());
     return jsonDecode(res.body);
   }
 
-  static Future<Map<String, dynamic>> updateProfile(String name, String email, {String? phoneNumber}) async {
+  static Future<Map<String, dynamic>> updateProfile({
+    String? name,
+    String? email,
+    String? phoneNumber,
+    String? city,
+    String? state,
+    String? password,
+    String? fcmToken,
+    String? avatarUrl,
+  }) async {
+    await checkServerUrl();
     final res = await http.patch(
       Uri.parse('$_activeUrl/users/me'),
       headers: await _headers(),
       body: jsonEncode({
-        'name': name,
-        'email': email,
+        if (name != null) 'name': name,
+        if (email != null) 'email': email,
         if (phoneNumber != null) 'phone_number': phoneNumber,
+        if (city != null) 'city': city,
+        if (state != null) 'state': state,
+        if (password != null) 'password': password,
+        if (fcmToken != null) 'fcm_token': fcmToken,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+      }),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> uploadFile(String filePath) async {
+    await checkServerUrl();
+    final token = await getToken();
+    final request = http.MultipartRequest('POST', Uri.parse('$_activeUrl/upload'));
+    if (token != null) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
+    
+    final extension = filePath.split('.').last.toLowerCase();
+    MediaType contentType;
+    if (extension == 'pdf') {
+      contentType = MediaType('application', 'pdf');
+    } else if (extension == 'png') {
+      contentType = MediaType('image', 'png');
+    } else if (extension == 'jpg' || extension == 'jpeg') {
+      contentType = MediaType('image', 'jpeg');
+    } else {
+      contentType = MediaType('application', 'octet-stream');
+    }
+
+    request.files.add(await http.MultipartFile.fromPath(
+      'file',
+      filePath,
+      contentType: contentType,
+    ));
+    
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+    return jsonDecode(response.body);
+  }
+
+  static Future<Map<String, dynamic>> reportProblem(String title, String description) async {
+    final res = await http.post(
+      Uri.parse('$_activeUrl/reports'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'title': title,
+        'description': description,
       }),
     );
     return jsonDecode(res.body);
@@ -186,6 +268,28 @@ class ApiService {
         'bookingId': bookingId,
         'razorpayOrderId': orderId,
         'razorpayPaymentId': paymentId,
+      }),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> initiateWalletPayment(double amount) async {
+    final res = await http.post(
+      Uri.parse('$_activeUrl/payments/wallet/initiate'),
+      headers: await _headers(),
+      body: jsonEncode({'amount': amount}),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> verifyWalletDeposit(String orderId, String paymentId, {double? amount}) async {
+    final res = await http.post(
+      Uri.parse('$_activeUrl/payments/wallet/verify'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'razorpayOrderId': orderId,
+        'razorpayPaymentId': paymentId,
+        if (amount != null) 'amount': amount,
       }),
     );
     return jsonDecode(res.body);

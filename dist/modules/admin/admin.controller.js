@@ -367,6 +367,28 @@ export class AdminController {
             next(err);
         }
     }
+    static async approveBankDetails(req, res, next) {
+        try {
+            const { id } = req.params;
+            const partner = await AdminService.approveBankDetails(id);
+            await AdminService.addAuditLog(req.user?.id || "admin", "Approve Bank Details", id, "SUCCESS");
+            return sendSuccess(res, partner);
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    static async rejectBankDetails(req, res, next) {
+        try {
+            const { id } = req.params;
+            const partner = await AdminService.rejectBankDetails(id);
+            await AdminService.addAuditLog(req.user?.id || "admin", "Reject Bank Details", id, "SUCCESS");
+            return sendSuccess(res, partner);
+        }
+        catch (err) {
+            next(err);
+        }
+    }
     // Venues CRUD
     static async createVenue(req, res, next) {
         try {

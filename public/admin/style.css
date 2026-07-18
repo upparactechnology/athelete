@@ -68,7 +68,11 @@
 
 body {
     font-family: 'Sora', sans-serif;
-    background: radial-gradient(at 0% 0%, #17121b 0px, transparent 50%), radial-gradient(at 100% 0%, #11101b 0px, transparent 50%), var(--bg-color);
+    background: 
+        radial-gradient(at 10% 20%, rgba(255, 92, 147, 0.1) 0px, transparent 40%),
+        radial-gradient(at 90% 10%, rgba(139, 92, 246, 0.12) 0px, transparent 40%),
+        radial-gradient(at 50% 80%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
+        var(--bg-color);
     color: var(--text-primary);
     min-height: 100vh;
     overflow-x: hidden;
@@ -101,8 +105,10 @@ body {
 /* Collapsible Sidebar */
 .sidebar {
     width: var(--sidebar-width);
-    background-color: var(--bg-secondary);
-    border-right: 1px solid var(--border-color);
+    background: rgba(17, 17, 19, 0.45);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     flex-direction: column;
     position: fixed;
@@ -111,7 +117,12 @@ body {
     top: 0;
     z-index: 100;
     padding: 24px 16px;
-    transition: width var(--transition-speed) cubic-bezier(0.4, 0, 0.2, 1), background-color var(--transition-speed) ease;
+    transition: width var(--transition-speed) cubic-bezier(0.4, 0, 0.2, 1), background-color var(--transition-speed) ease, border-color var(--transition-speed) ease;
+}
+
+[data-theme="light"] .sidebar {
+    background: rgba(255, 255, 255, 0.6);
+    border-right: 1px solid rgba(255, 255, 255, 0.65);
 }
 
 /* Sidebar Collapsed State */
@@ -133,10 +144,51 @@ body {
     white-space: nowrap;
     opacity: 1;
     transition: opacity var(--transition-speed) ease;
+    width: 100%;
 }
 
 .app-layout.collapsed .logo-wrapper {
-    opacity: 0;
+    opacity: 1;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-logo {
+    height: 44px;
+    max-width: 210px;
+    object-fit: contain;
+    transition: opacity var(--transition-speed) ease;
+}
+
+.sidebar-logo-dark {
+    display: block;
+}
+
+.sidebar-logo-light {
+    display: none;
+}
+
+[data-theme="light"] .sidebar-logo-dark {
+    display: none;
+}
+
+[data-theme="light"] .sidebar-logo-light {
+    display: block;
+}
+
+.sidebar-logo-collapsed {
+    display: none;
+    height: 36px;
+    width: 36px;
+    object-fit: contain;
+}
+
+.app-layout.collapsed .sidebar-logo {
+    display: none !important;
+}
+
+.app-layout.collapsed .sidebar-logo-collapsed {
+    display: block;
 }
 
 .logo {
@@ -424,11 +476,23 @@ body {
     justify-content: space-between;
     position: sticky;
     top: 0;
-    background-color: var(--bg-color);
+    background: rgba(10, 10, 11, 0.45);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     z-index: 90;
-    border-bottom: 1px solid var(--border-color);
     margin-bottom: 24px;
-    padding: 0 4px;
+    margin-left: -40px;
+    margin-right: -40px;
+    margin-top: -24px;
+    padding: 0 40px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .top-header {
+    background: rgba(255, 255, 255, 0.6);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.65);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.01);
 }
 
 .header-left {
@@ -572,17 +636,31 @@ body {
 }
 
 .kpi-card {
-    background-color: var(--card-bg);
-    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--border-radius-large);
     padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    transition: transform var(--transition-speed) ease, border-color var(--transition-speed) ease;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.15);
+    transition: transform var(--transition-speed) ease, border-color var(--transition-speed) ease, background-color var(--transition-speed) ease;
 }
 
 .kpi-card:hover {
     transform: translateY(-2px);
-    border-color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 92, 147, 0.3);
+}
+
+[data-theme="light"] .kpi-card {
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.02);
+}
+
+[data-theme="light"] .kpi-card:hover {
+    background: rgba(255, 255, 255, 0.8);
+    border-color: rgba(255, 92, 147, 0.4);
 }
 
 .kpi-card.accent {
@@ -628,10 +706,28 @@ body {
 }
 
 .widget-card {
-    background-color: var(--card-bg);
-    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--border-radius-large);
     padding: 20px;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.15);
+    transition: border-color var(--transition-speed) ease, background-color var(--transition-speed) ease;
+}
+
+.widget-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] .widget-card {
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.02);
+}
+
+[data-theme="light"] .widget-card:hover {
+    background: rgba(255, 255, 255, 0.75);
 }
 
 .widget-card h2 {
@@ -1116,7 +1212,7 @@ textarea.form-control {
 .detail-drawer {
     position: fixed;
     top: 0;
-    right: -420px;
+    right: 0;
     width: 400px;
     height: 100vh;
     background-color: var(--bg-secondary);
@@ -1125,10 +1221,11 @@ textarea.form-control {
     display: flex;
     flex-direction: column;
     box-shadow: none;
-    transition: right var(--transition-speed) cubic-bezier(0.16, 1, 0.3, 1);
+    transform: translateX(100%);
+    transition: transform var(--transition-speed) cubic-bezier(0.16, 1, 0.3, 1);
 }
 .detail-drawer.active {
-    right: 0;
+    transform: translateX(0);
     box-shadow: -10px 0 30px rgba(0, 0, 0, 0.25);
 }
 

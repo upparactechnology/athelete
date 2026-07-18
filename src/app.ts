@@ -18,7 +18,8 @@ const app = express();
 
 // Security Hardening Middleware
 app.use(helmet({
-  contentSecurityPolicy: false // Disable CSP validation to permit visual tools/scripts locally
+  contentSecurityPolicy: false, // Disable CSP validation to permit visual tools/scripts locally
+  crossOriginResourcePolicy: false
 }));
 
 // CORS Configuration
@@ -43,6 +44,9 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // Serve Static Admin Client files
 app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
 // Mount administrative REST APIs
 app.use('/api/admin', adminRoutes);

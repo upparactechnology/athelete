@@ -19,6 +19,8 @@ adminRoutes.get('/partners', AdminController.getPartners);
 adminRoutes.post('/partners', AdminController.createPartner);
 adminRoutes.patch('/partners/:id', AdminController.updatePartner);
 adminRoutes.delete('/partners/:id', AdminController.deletePartner);
+adminRoutes.patch('/partners/:id/bank-approve', AdminController.approveBankDetails);
+adminRoutes.patch('/partners/:id/bank-reject', AdminController.rejectBankDetails);
 adminRoutes.get('/kyc/pending', AdminController.getPendingKycDocuments);
 adminRoutes.patch('/kyc/document/:id', AdminController.updateKycDocumentStatus);
 // Venues CRUD

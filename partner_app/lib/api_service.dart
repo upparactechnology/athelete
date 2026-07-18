@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl =  'http://192.168.29.240:4000/api';
-  static const String fallbackUrl = 'http://localhost:4000/api';
+  static const String baseUrl = 'http://localhost:4000/api';
+  static const String fallbackUrl = 'http://192.168.29.240:4000/api';
 
   static String _activeUrl = baseUrl;
 
@@ -48,12 +49,16 @@ class ApiService {
   }
 
   // 1. Authentication
-  static Future<Map<String, dynamic>> requestOtp(String phoneNumber) async {
+  static Future<Map<String, dynamic>> requestOtp(String phoneNumber, {String? password, bool? isSignUp}) async {
     await checkServerUrl();
     final res = await http.post(
       Uri.parse('$_activeUrl/auth/request-otp'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phoneNumber': phoneNumber}),
+      body: jsonEncode({
+        'phoneNumber': phoneNumber,
+        if (password != null) 'password': password,
+        if (isSignUp != null) 'isSignUp': isSignUp,
+      }),
     );
     return jsonDecode(res.body);
   }
@@ -72,13 +77,39 @@ class ApiService {
     return data;
   }
 
+  static Future<Map<String, dynamic>> googleLogin(String email, String name) async {
+    await checkServerUrl();
+    final res = await http.post(
+      Uri.parse('$_activeUrl/auth/google'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': email,
+        'name': name,
+        'role': 'partner',
+      }),
+    );
+    final data = jsonDecode(res.body);
+    if (data['success'] == true && data['data']?['accessToken'] != null) {
+      await setToken(data['data']['accessToken']);
+    }
+    return data;
+  }
+
   // 2. Profile & Settings
   static Future<Map<String, dynamic>> getProfile() async {
     final res = await http.get(Uri.parse('$_activeUrl/users/me'), headers: await _headers());
     return jsonDecode(res.body);
   }
 
-  static Future<Map<String, dynamic>> updateProfile({String? fcmToken, String? phoneNumber, String? email}) async {
+  static Future<Map<String, dynamic>> updateProfile({
+    String? fcmToken,
+    String? phoneNumber,
+    String? email,
+    String? bankName,
+    String? bankAccountNo,
+    String? bankIfsc,
+    String? avatarUrl,
+  }) async {
     final res = await http.patch(
       Uri.parse('$_activeUrl/users/me'),
       headers: await _headers(),
@@ -86,8 +117,17 @@ class ApiService {
         if (fcmToken != null) 'fcm_token': fcmToken,
         if (phoneNumber != null) 'phone_number': phoneNumber,
         if (email != null) 'email': email,
+        if (bankName != null) 'bank_name': bankName,
+        if (bankAccountNo != null) 'bank_account_no': bankAccountNo,
+        if (bankIfsc != null) 'bank_ifsc': bankIfsc,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
       }),
     );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> deleteProfile() async {
+    final res = await http.delete(Uri.parse('$_activeUrl/users/me'), headers: await _headers());
     return jsonDecode(res.body);
   }
 
@@ -108,6 +148,8 @@ class ApiService {
     required String contactPhone,
     double? latitude,
     double? longitude,
+    String? openingTime,
+    String? closingTime,
   }) async {
     final res = await http.post(
       Uri.parse('$_activeUrl/partner/venues'),
@@ -123,6 +165,8 @@ class ApiService {
         'contactPhone': contactPhone,
         'latitude': latitude,
         'longitude': longitude,
+        'openingTime': openingTime,
+        'closingTime': closingTime,
       }),
     );
     return jsonDecode(res.body);
@@ -140,6 +184,8 @@ class ApiService {
     required String contactPhone,
     double? latitude,
     double? longitude,
+    String? openingTime,
+    String? closingTime,
   }) async {
     final res = await http.patch(
       Uri.parse('$_activeUrl/partner/venues/$venueId'),
@@ -155,6 +201,8 @@ class ApiService {
         'contactPhone': contactPhone,
         'latitude': latitude,
         'longitude': longitude,
+        'openingTime': openingTime,
+        'closingTime': closingTime,
       }),
     );
     return jsonDecode(res.body);
@@ -166,16 +214,27 @@ class ApiService {
     return jsonDecode(res.body);
   }
 
-  static Future<Map<String, dynamic>> bulkGenerateSlots(String venueId, String date, String startTime, String endTime, double price, int durationMinutes) async {
+  static Future<Map<String, dynamic>> bulkGenerateSlots(String venueId, List<String> dates, String startTime, String endTime, double price, int durationMinutes) async {
     final res = await http.post(
       Uri.parse('$_activeUrl/partner/venues/$venueId/slots/bulk'),
       headers: await _headers(),
       body: jsonEncode({
-        'date': date,
+        'dates': dates,
         'startTime': startTime,
         'endTime': endTime,
         'price': price,
         'durationMinutes': durationMinutes,
+      }),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> bulkDeleteSlots(String venueId, List<String> slotIds) async {
+    final res = await http.delete(
+      Uri.parse('$_activeUrl/partner/venues/$venueId/slots/bulk'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'slotIds': slotIds,
       }),
     );
     return jsonDecode(res.body);
@@ -237,21 +296,82 @@ class ApiService {
   }
 
   // 9. KYC
-  static Future<Map<String, dynamic>> submitPartnerKyc(String documentType, String fileUrl) async {
+  static Future<Map<String, dynamic>> submitPartnerKyc(
+    String documentType, 
+    String fileUrl, {
+    String? gstNumber,
+    String? panNumber,
+    String? aadhaarNumber,
+  }) async {
     final res = await http.post(
       Uri.parse('$_activeUrl/partner/kyc'),
       headers: await _headers(),
       body: jsonEncode({
         'documentType': documentType,
         'fileUrl': fileUrl,
+        if (gstNumber != null) 'gstNumber': gstNumber,
+        if (panNumber != null) 'panNumber': panNumber,
+        if (aadhaarNumber != null) 'aadhaarNumber': aadhaarNumber,
       }),
     );
     return jsonDecode(res.body);
   }
 
-  // 10. Banners Discovery
+  // 10. Settings
+  static Future<Map<String, dynamic>> getSettings() async {
+    final res = await http.get(Uri.parse('$_activeUrl/content/settings'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  // 11. Banners Discovery
   static Future<Map<String, dynamic>> getBanners() async {
     final res = await http.get(Uri.parse('$_activeUrl/content/banners?target=partner'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  // 12. File Upload
+  static Future<Map<String, dynamic>> uploadFile(String filePath) async {
+    await checkServerUrl();
+    final token = await getToken();
+    final request = http.MultipartRequest('POST', Uri.parse('$_activeUrl/upload'));
+    if (token != null) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
+    
+    final extension = filePath.split('.').last.toLowerCase();
+    MediaType contentType;
+    if (extension == 'pdf') {
+      contentType = MediaType('application', 'pdf');
+    } else if (extension == 'png') {
+      contentType = MediaType('image', 'png');
+    } else if (extension == 'jpg' || extension == 'jpeg') {
+      contentType = MediaType('image', 'jpeg');
+    } else {
+      contentType = MediaType('application', 'octet-stream');
+    }
+
+    request.files.add(await http.MultipartFile.fromPath(
+      'file',
+      filePath,
+      contentType: contentType,
+    ));
+    
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+    return jsonDecode(response.body);
+  }
+
+  // 13. Support Ticket
+  static Future<Map<String, dynamic>> submitSupportTicket(String title, String description) async {
+    await checkServerUrl();
+    final res = await http.post(
+      Uri.parse('$_activeUrl/reports'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'title': title,
+        'description': description,
+      }),
+    );
     return jsonDecode(res.body);
   }
 }

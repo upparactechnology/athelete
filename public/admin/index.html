@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APOV Admin Portal - Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    
+    <link rel="icon" type="image/png" href="logo.png">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -19,8 +19,9 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="logo-wrapper">
-                    <div class="logo">ATHLETE'S POV</div>
-                    <div class="logo-sub">ADMIN PANEL</div>
+                    <img src="dark.png" alt="Athlete's POV Logo" class="sidebar-logo sidebar-logo-dark">
+                    <img src="logo-name.png" alt="Athlete's POV Logo" class="sidebar-logo sidebar-logo-light">
+                    <img src="logo.png" alt="Athlete's POV Logo Icon" class="sidebar-logo-collapsed">
                 </div>
             </div>
             
@@ -931,7 +932,7 @@
                                     <tr>
                                         <th>Banner ID</th>
                                         <th>Title</th>
-                                        <th>Image Preview Address</th>
+                                        <th>Image Preview</th>
                                         <th>Target App</th>
                                         <th>Priority</th>
                                         <th>Status</th>
@@ -989,6 +990,36 @@
                                 <div class="form-group">
                                     <label>Support Email Address</label>
                                     <input type="email" class="form-control" id="settings-supportEmail" required>
+                                </div>
+                                <div class="form-row" style="display: flex; gap: 16px; margin-bottom: 20px;">
+                                    <div class="form-field" style="flex: 1;">
+                                        <label>Support Phone Number</label>
+                                        <input type="text" class="form-control" id="settings-supportPhone">
+                                    </div>
+                                    <div class="form-field" style="flex: 1;">
+                                        <label>Support WhatsApp Number</label>
+                                        <input type="text" class="form-control" id="settings-supportWhatsapp">
+                                    </div>
+                                </div>
+                                <div class="form-row" style="display: flex; gap: 16px; margin-bottom: 20px;">
+                                    <div class="form-field" style="flex: 1;">
+                                        <label>Privacy Policy URL</label>
+                                        <input type="text" class="form-control" id="settings-privacyPolicyUrl">
+                                    </div>
+                                    <div class="form-field" style="flex: 1;">
+                                        <label>Terms of Service URL</label>
+                                        <input type="text" class="form-control" id="settings-termsOfServiceUrl">
+                                    </div>
+                                </div>
+                                <div class="form-row" style="display: flex; gap: 16px; margin-bottom: 20px;">
+                                    <div class="form-field" style="flex: 1;">
+                                        <label>Play Store URL</label>
+                                        <input type="text" class="form-control" id="settings-playStoreUrl">
+                                    </div>
+                                    <div class="form-field" style="flex: 1;">
+                                        <label>App Store URL</label>
+                                        <input type="text" class="form-control" id="settings-appStoreUrl">
+                                    </div>
                                 </div>
                                 <div class="form-row" style="display: flex; gap: 16px; margin-bottom: 20px;">
                                     <div class="form-field" style="flex: 1;">
@@ -1069,6 +1100,74 @@
                                         <input type="checkbox" id="settings-useSmtpForOtp">
                                         <span style="color: var(--accent-primary);">Send OTP via Email instead of SMS</span>
                                     </label>
+                                </div>
+
+                                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+                                <h3 style="font-size: 0.95rem; text-transform: uppercase; color: var(--accent-primary); margin-bottom: 12px; letter-spacing: 0.5px;">Firebase Push Notifications Gateway</h3>
+                                <div class="form-group">
+                                    <label>Firebase Service Account JSON Credentials</label>
+                                    <textarea class="form-control" id="settings-firebaseServiceAccount" style="height: 120px; font-family: monospace; font-size: 0.8rem; resize: vertical; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px; border-radius: 4px;" placeholder='Paste Google Service Account private key JSON here e.g. { "type": "service_account", ... }'></textarea>
+                                </div>
+                                <div class="form-group" style="margin-top: 16px;">
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 500;">
+                                        <input type="checkbox" id="settings-useDynamicFcm">
+                                        <span style="color: var(--accent-primary);">Enable Dynamic FCM Push Notifications (using this JSON key)</span>
+                                    </label>
+                                </div>
+
+                                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+                                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+                                <h3 style="font-size: 0.95rem; text-transform: uppercase; color: var(--accent-primary); margin-bottom: 12px; letter-spacing: 0.5px;">File Storage Configuration</h3>
+                                <div class="form-group">
+                                    <label>Storage Provider</label>
+                                    <select class="form-control" id="settings-storageProvider" onchange="toggleStorageProviderFields()">
+                                        <option value="local">Local Storage (Server Disk)</option>
+                                        <option value="s3">AWS S3 Bucket</option>
+                                        <option value="drive">Google Drive</option>
+                                    </select>
+                                </div>
+
+                                <!-- AWS S3 Fields -->
+                                <div id="storage-s3-fields" style="display: none;">
+                                    <div class="form-group">
+                                        <label>AWS S3 Bucket Name</label>
+                                        <input type="text" class="form-control" id="settings-awsS3Bucket" placeholder="e.g. athletepov-media">
+                                    </div>
+                                    <div class="form-row" style="display: flex; gap: 16px; margin-bottom: 20px;">
+                                        <div class="form-field" style="flex: 1;">
+                                            <label>AWS Access Key ID</label>
+                                            <input type="text" class="form-control" id="settings-awsAccessKeyId" placeholder="AKIA...">
+                                        </div>
+                                        <div class="form-field" style="flex: 1;">
+                                            <label>AWS Secret Access Key</label>
+                                            <input type="password" class="form-control" id="settings-awsSecretAccessKey" placeholder="••••••••••••••••">
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>AWS Region</label>
+                                        <input type="text" class="form-control" id="settings-awsRegion" placeholder="e.g. ap-south-1">
+                                    </div>
+                                </div>
+
+                                <!-- Google Drive Fields -->
+                                <div id="storage-drive-fields" style="display: none;">
+                                    <div class="form-row" style="display: flex; gap: 16px; margin-bottom: 20px;">
+                                        <div class="form-field" style="flex: 1;">
+                                            <label>Google Drive Client ID</label>
+                                            <input type="text" class="form-control" id="settings-googleDriveClientId" placeholder="e.g. 12345-abc.apps.googleusercontent.com">
+                                        </div>
+                                        <div class="form-field" style="flex: 1;">
+                                            <label>Google Drive Client Secret</label>
+                                            <input type="password" class="form-control" id="settings-googleDriveClientSecret" placeholder="••••••••••••••••">
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Google Drive Folder ID</label>
+                                        <input type="text" class="form-control" id="settings-googleDriveFolderId" placeholder="Folder ID where files will be uploaded">
+                                    </div>
                                 </div>
 
                                 <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
@@ -1485,21 +1584,27 @@
 
     <!-- MODAL: KYC DOCUMENT VIEWER -->
     <div id="kycModal" class="modal-overlay">
-        <div class="modal-card">
+        <div class="modal-card" style="max-width: 600px; width: 90%;">
             <div class="modal-header">
                 <h2>KYC Document Inspection</h2>
                 <button class="modal-close" onclick="closeModal('kycModal')">&times;</button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="max-height: 75vh; overflow-y: auto;">
                 <div class="kyc-preview-container">
-                    <p style="margin-bottom: 12px; font-size: 0.85rem; color: var(--text-secondary);">Uploaded Document File Mock Address:</p>
-                    <div class="mock-doc-box">
+                    <p style="margin-bottom: 12px; font-size: 0.85rem; color: var(--text-secondary);">Uploaded Document File Address:</p>
+                    <div class="mock-doc-box" style="margin-bottom: 15px;">
                         <span id="kycDocUrl">https://s3.aws.amazon.com/kyc/gst_p1.pdf</span>
                         <a href="#" class="btn-action text-secondary" style="margin-left: 10px;" id="kycDocLink" target="_blank">Open Link</a>
                     </div>
+                    <!-- Direct Preview Image/Iframe -->
+                    <div id="kycDocPreviewContainer" style="width: 100%; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; background: #000; text-align: center; padding: 10px; margin-bottom: 15px;">
+                        <img id="kycDocPreviewImg" src="" alt="Document Preview" style="max-width: 100%; max-height: 350px; object-fit: contain; border-radius: 4px; display: none; margin: 0 auto;">
+                        <iframe id="kycDocPreviewPdf" src="" style="width: 100%; height: 350px; border: none; display: none;"></iframe>
+                        <div id="kycDocPreviewPlaceholder" style="padding: 40px; color: var(--text-muted); display: none;">No preview available for this file type</div>
+                    </div>
                 </div>
 
-                <div class="form-group" id="rejectionNoteGroup" style="margin-top: 20px;">
+                <div class="form-group" id="rejectionNoteGroup" style="margin-top: 10px;">
                     <label>Rejection Reason Details (Required if Rejecting)</label>
                     <textarea class="form-control" id="kycRejectionNote" rows="3" placeholder="Provide reason details (e.g. illegible certificate file, expired registration date)..."></textarea>
                 </div>
@@ -1955,8 +2060,12 @@
                         <input type="text" class="form-control" id="banner-title" placeholder="Welcome Bonus Flat ₹100 Off" required>
                     </div>
                     <div class="form-group">
-                        <label>Image URL</label>
-                        <input type="text" class="form-control" id="banner-image-url" placeholder="https://..." required>
+                        <label>Banner Image (Upload or enter URL)</label>
+                        <input type="file" class="form-control" id="banner-image-file" accept="image/*" onchange="handleBannerImageUpload(event)" style="margin-bottom: 8px;">
+                        <input type="text" class="form-control" id="banner-image-url" placeholder="Or enter image URL (https://...)" oninput="updateBannerImagePreview(this.value)" required>
+                        <div id="banner-image-preview-container" style="margin-top: 8px; display: none;">
+                            <img id="banner-image-preview" src="" alt="Preview" style="max-height: 100px; border-radius: 8px; border: 1px solid #ddd;">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>Link URL (Optional)</label>
@@ -2157,6 +2266,97 @@
         </div>
         <div class="drawer-body" id="drawerBody">
             <div class="drawer-loading">Select an athlete row to view account file details.</div>
+        </div>
+    </div>
+
+    <!-- RIGHT-SIDE PARTNER ACCOUNT DRAWER -->
+    <div id="partnerDrawerBackdrop" class="drawer-backdrop" onclick="closePartnerDrawer()"></div>
+    <div id="partnerDetailDrawer" class="detail-drawer" style="max-width: 600px; width: 90%;">
+        <div class="drawer-header">
+            <h2 class="drawer-title">Partner Account Details</h2>
+            <button class="drawer-close-btn" onclick="closePartnerDrawer()">&times;</button>
+        </div>
+        <div class="drawer-body" id="partnerDrawerBody" style="padding: 20px; overflow-y: auto; height: calc(100% - 60px);">
+            <div class="drawer-loading">Select a partner row to view account file details.</div>
+        </div>
+    </div>
+
+    <!-- MODAL: MILESTONE EDIT -->
+    <div id="milestoneModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>Configure Milestone</h2>
+                <button class="modal-close" onclick="closeModal('milestoneModal')">&times;</button>
+            </div>
+            <form id="milestoneForm" onsubmit="saveMilestoneConfig(event)">
+                <div class="modal-body">
+                    <input type="hidden" id="milestone-id">
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Milestone Name</label>
+                        <input type="text" id="milestone-name" readonly class="form-control" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.05); color: #888; border: 1px solid var(--border-color); border-radius: 4px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Target Condition (Bookings count)</label>
+                        <input type="number" id="milestone-count" required class="form-control" style="width: 100%; padding: 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Milestone Type Tag</label>
+                        <input type="text" id="milestone-type" required class="form-control" style="width: 100%; padding: 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Reward Type</label>
+                        <select id="milestone-rewardType" class="form-control" style="width: 100%; padding: 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px;">
+                            <option value="Free Slot">Free Slot</option>
+                            <option value="Cashback">Cashback</option>
+                            <option value="Coupon">Coupon</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="milestone-coupon-group" style="display:none; margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Select Reward Coupon Code</label>
+                        <select id="milestone-couponCode" class="form-control" style="width: 100%; padding: 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px;">
+                            <!-- Populated with coupons from api -->
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                    <button type="button" class="btn-secondary" onclick="closeModal('milestoneModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: REWARD EDIT -->
+    <div id="rewardModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>Configure Reward Rule</h2>
+                <button class="modal-close" onclick="closeModal('rewardModal')">&times;</button>
+            </div>
+            <form id="rewardForm" onsubmit="saveRewardConfig(event)">
+                <div class="modal-body">
+                    <input type="hidden" id="reward-id">
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Reward Rule Name</label>
+                        <input type="text" id="reward-name" readonly class="form-control" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.05); color: #888; border: 1px solid var(--border-color); border-radius: 4px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Description</label>
+                        <textarea id="reward-desc" required class="form-control" rows="2" style="width: 100%; padding: 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; font-family: inherit;"></textarea>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Status</label>
+                        <select id="reward-status" class="form-control" style="width: 100%; padding: 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px;">
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                    <button type="button" class="btn-secondary" onclick="closeModal('rewardModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Changes</button>
+                </div>
+            </form>
         </div>
     </div>
 

@@ -9,6 +9,7 @@ import {
   ConflictError
 } from '../../shared/utils/errors.js';
 import { WebSocketService } from '../../shared/services/websocket.js';
+import { sendPushNotification } from '../../config/fcm.js';
 
 export class AdminService {
   // 1. Admin Authentication
@@ -28,7 +29,7 @@ export class AdminService {
       status: "active"
     };
 
-    const token = jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: '15m' });
+    const token = jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: '1d' });
     const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
     // Store refresh token
@@ -167,7 +168,8 @@ export class AdminService {
     return prisma.partner.findMany({
       include: {
         partner_documents: true,
-        venues: true
+        venues: true,
+        settlements: true
       },
       orderBy: { created_at: 'desc' }
     });
@@ -204,17 +206,42 @@ export class AdminService {
       where: { partner_id: doc.partner_id }
     });
 
-    let overallKycStatus = "verified";
+    const REQUIRED_DOC_TYPES = ['gst_certificate', 'pan_card', 'ownership_proof', 'cancelled_cheque'];
+    const uploadedTypes = allDocs.map(d => d.document_type);
+    const hasAllRequired = REQUIRED_DOC_TYPES.every(type => uploadedTypes.includes(type));
+
+    let overallKycStatus = "unverified";
     if (allDocs.some(d => d.status === "rejected")) {
       overallKycStatus = "rejected";
-    } else if (allDocs.some(d => d.status === "pending")) {
+    } else if (allDocs.some(d => d.status === "pending") || !hasAllRequired) {
       overallKycStatus = "pending";
+    } else if (hasAllRequired && allDocs.every(d => d.status === "verified")) {
+      overallKycStatus = "verified";
     }
 
     await prisma.partner.update({
       where: { partner_id: doc.partner_id },
       data: { kyc_status: overallKycStatus }
     });
+
+    // Send FCM Notification to Partner
+    const partner = await prisma.partner.findUnique({ where: { partner_id: doc.partner_id } });
+    if (partner && partner.fcm_token) {
+      const docTypePretty = doc.document_type.replace(/_/g, ' ').toUpperCase();
+      if (status === "verified") {
+        sendPushNotification(
+          partner.fcm_token,
+          "KYC Document Approved!",
+          `Your ${docTypePretty} has been approved successfully.`
+        ).catch(e => console.error("FCM error notifying partner of approved KYC:", e));
+      } else if (status === "rejected") {
+        sendPushNotification(
+          partner.fcm_token,
+          "KYC Document Rejected",
+          `Your ${docTypePretty} has been rejected. Reason: ${rejectionNote || 'Document verification failed.'}`
+        ).catch(e => console.error("FCM error notifying partner of rejected KYC:", e));
+      }
+    }
 
     return updatedDoc;
   }
@@ -488,8 +515,7 @@ export class AdminService {
       }
     });
 
-    // In a real system, we would retrieve FCM tokens matching the audienceType and send FCM alerts.
-    // For this prototype, we record the broadcast and add notifications to the in-app user inbox mock.
+    // Retrieve FCM tokens matching the audienceType and send FCM alerts.
     let targetRole = audienceType.startsWith("all_partners") ? "partner" : "user";
     if (audienceType === "all") targetRole = "both";
 
@@ -507,6 +533,11 @@ export class AdminService {
             body
           }
         });
+        if (u.fcm_token) {
+          sendPushNotification(u.fcm_token, title, body).catch(e => 
+            console.error(`Failed to send FCM to user ${u.user_id}:`, e)
+          );
+        }
       }
     }
 
@@ -521,6 +552,11 @@ export class AdminService {
             body
           }
         });
+        if (p.fcm_token) {
+          sendPushNotification(p.fcm_token, title, body).catch(e => 
+            console.error(`Failed to send FCM to partner ${p.partner_id}:`, e)
+          );
+        }
       }
     }
 
@@ -602,7 +638,16 @@ export class AdminService {
   public static async deleteUser(userId: string) {
     const user = await prisma.user.findUnique({ where: { user_id: userId } });
     if (!user) throw new ValidationError("User not found");
-    return prisma.user.delete({ where: { user_id: userId } });
+    return prisma.user.update({
+      where: { user_id: userId },
+      data: {
+        phone_number: `deleted-user-${userId}`,
+        email: null,
+        name: 'Deleted Athlete',
+        fcm_token: null,
+        status: 'Deleted'
+      }
+    });
   }
 
   // Partners CRUD
@@ -621,7 +666,56 @@ export class AdminService {
   public static async deletePartner(partnerId: string) {
     const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId } });
     if (!partner) throw new ValidationError("Partner not found");
-    return prisma.partner.delete({ where: { partner_id: partnerId } });
+
+    // Unlist all venues associated with this partner
+    await prisma.venue.updateMany({
+      where: { partner_id: partnerId },
+      data: { status: 'unlisted' }
+    });
+
+    return prisma.partner.update({
+      where: { partner_id: partnerId },
+      data: {
+        phone_number: `deleted-partner-${partnerId}`,
+        email: `deleted-partner-${partnerId}@athletepov.com`,
+        fcm_token: null,
+        password_hash: null,
+        kyc_status: 'deleted'
+      }
+    });
+  }
+
+  public static async approveBankDetails(partnerId: string) {
+    const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId } });
+    if (!partner) throw new ValidationError("Partner not found");
+
+    return prisma.partner.update({
+      where: { partner_id: partnerId },
+      data: {
+        bank_name: partner.temp_bank_name,
+        bank_account_no: partner.temp_bank_account_no,
+        bank_ifsc: partner.temp_bank_ifsc,
+        temp_bank_name: null,
+        temp_bank_account_no: null,
+        temp_bank_ifsc: null,
+        bank_status: 'approved'
+      }
+    });
+  }
+
+  public static async rejectBankDetails(partnerId: string) {
+    const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId } });
+    if (!partner) throw new ValidationError("Partner not found");
+
+    return prisma.partner.update({
+      where: { partner_id: partnerId },
+      data: {
+        temp_bank_name: null,
+        temp_bank_account_no: null,
+        temp_bank_ifsc: null,
+        bank_status: 'approved' // Revert status back to approved for the active details
+      }
+    });
   }
 
   // Venues CRUD
@@ -725,7 +819,23 @@ export class AdminService {
     const formatted: any = { ...data };
     if (data.period_start) formatted.period_start = new Date(data.period_start);
     if (data.period_end) formatted.period_end = new Date(data.period_end);
-    return prisma.settlement.update({ where: { settlement_id: settlementId }, data: formatted });
+    
+    const updated = await prisma.settlement.update({ 
+      where: { settlement_id: settlementId }, 
+      data: formatted,
+      include: { partner: true }
+    });
+
+    // Send FCM Notification to Partner if status is updated to settled
+    if (data.status === 'settled' && updated.partner.fcm_token) {
+      sendPushNotification(
+        updated.partner.fcm_token,
+        "Settlement Settled!",
+        `Your settlement of ₹${updated.net_amount} for period ${updated.period_start.toLocaleDateString()} - ${updated.period_end.toLocaleDateString()} has been settled.`
+      ).catch(e => console.error("FCM error notifying partner of settled payment:", e));
+    }
+
+    return updated;
   }
 
   public static async deleteSettlement(settlementId: string) {
@@ -804,6 +914,13 @@ export class AdminService {
       platformName: "Athlete's POV",
       supportEmail: "support@athletepov.com",
       supportPhone: "9427961426",
+      supportWhatsapp: "9427961426",
+      privacyPolicyUrl: "https://athletepov.com/privacy-policy",
+      termsOfServiceUrl: "https://athletepov.com/terms-of-service",
+      playStoreUrl: "https://play.google.com/store/apps/details?id=com.athletepov.partner",
+      appStoreUrl: "https://apps.apple.com/app/athletepov-partner/id123456789",
+      firebaseServiceAccount: "",
+      useDynamicFcm: false,
       minWithdrawal: 1000,
       convenienceFee: 60,
       smtpHost: "",
@@ -812,7 +929,17 @@ export class AdminService {
       smtpPass: "",
       smtpSecure: false,
       smtpFrom: "",
-      useSmtpForOtp: false
+      useSmtpForOtp: false,
+      partnerAppVersion: "1.0.24",
+      playerAppVersion: "1.0.12",
+      storageProvider: "local",
+      awsS3Bucket: "",
+      awsAccessKeyId: "",
+      awsSecretAccessKey: "",
+      awsRegion: "",
+      googleDriveClientId: "",
+      googleDriveClientSecret: "",
+      googleDriveFolderId: ""
     };
     if (!data) {
       return defaults;

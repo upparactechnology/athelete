@@ -1,26 +1,16 @@
 import { prisma } from './prisma.js';
 
 export async function seedDatabase() {
-  const userCount = await prisma.user.count();
-  if (userCount > 0) {
-    console.log("Database already contains data. Skipping seeding to prevent data loss.");
+  const [userCount, partnerCount, venueCount] = await Promise.all([
+    prisma.user.count(),
+    prisma.partner.count(),
+    prisma.venue.count(),
+  ]);
+
+  if (userCount > 0 || partnerCount > 0 || venueCount > 0) {
+    console.log("Database already contains data (Users, Partners, or Venues). Skipping seeding to prevent data loss.");
     return;
   }
-
-  console.log("Cleaning existing database tables before seeding...");
-
-  // Clean up order (dependent children tables first)
-  await prisma.userMilestone.deleteMany();
-  await prisma.partnerDocument.deleteMany();
-  await prisma.dispute.deleteMany();
-  await prisma.transaction.deleteMany();
-  await prisma.booking.deleteMany();
-  await prisma.slot.deleteMany();
-  await prisma.venue.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.partner.deleteMany();
-  await prisma.coupon.deleteMany();
-  await prisma.refreshToken.deleteMany();
 
   console.log("Seeding database with matching reference mock data...");
 
