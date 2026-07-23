@@ -753,6 +753,36 @@ export class ClientService {
     if (!booking) throw new NotFoundError("Booking not found");
     if (booking.user_id !== userId) throw new ValidationError("Unauthorized cancellation");
 
+    // Calculate hours until slot start time according to March 2026 Policy
+    let refundEligibility = "NO_REFUND";
+    let refundMessage = "No refund (Less than 6 hours before booking)";
+    let estimatedRefundAmount = 0;
+
+    if (booking.slot && booking.slot.date) {
+      const slotDateStr = new Date(booking.slot.date).toISOString().split('T')[0];
+      const startTimeStr = booking.slot.start_time || "00:00";
+      const slotDateTime = new Date(`${slotDateStr}T${startTimeStr.length === 5 ? startTimeStr + ":00" : startTimeStr}`);
+      const now = new Date();
+      const diffMs = slotDateTime.getTime() - now.getTime();
+      const diffHours = diffMs / (1000 * 60 * 60);
+
+      const totalPaid = Number(booking.online_amount || 0) + Number(booking.convenience_fee || 0);
+
+      if (diffHours >= 24) {
+        refundEligibility = "FULL_REFUND";
+        refundMessage = "Full refund or platform credit (minus handling fee)";
+        estimatedRefundAmount = Math.max(0, totalPaid * 0.95);
+      } else if (diffHours >= 6) {
+        refundEligibility = "PARTIAL_REFUND";
+        refundMessage = "Partial refund or platform credit (minus handling fee)";
+        estimatedRefundAmount = Math.max(0, totalPaid * 0.50);
+      } else {
+        refundEligibility = "NO_REFUND";
+        refundMessage = "No refund (Less than 6 hours before booking)";
+        estimatedRefundAmount = 0;
+      }
+    }
+
     const updated = await prisma.booking.update({
       where: { booking_id: bookingId },
       data: { status: "CANCELLED" }
@@ -768,7 +798,7 @@ export class ClientService {
       sendPushNotification(
         booking.user.fcm_token,
         "Booking Cancelled",
-        `Your booking at ${booking.venue.name} has been cancelled.`
+        `Your booking at ${booking.venue.name} has been cancelled. Policy outcome: ${refundMessage}`
       ).catch(e => console.error("FCM error notifying user of cancelled booking:", e));
     }
     if (booking.venue.partner.fcm_token) {
@@ -783,7 +813,13 @@ export class ClientService {
     WebSocketService.broadcast('bookings', updated);
     WebSocketService.broadcast('slots', [updatedSlot]);
 
-    return { message: "Booking cancelled successfully" };
+    return {
+      message: "Booking cancelled successfully",
+      refundEligibility,
+      refundMessage,
+      estimatedRefundAmount,
+      processingTime: "7-10 working days"
+    };
   }
 
   // 6. Coupons

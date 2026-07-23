@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   // Use 10.0.2.2 for Android Emulator to connect to localhost, fallback to localhost for desktop/web
-  static const String baseUrl = 'http://192.168.29.240:4000/api';
-  static const String fallbackUrl = 'http://localhost:4000/api';
+  static const String baseUrl = 'http://athelete.upparac.com/api';
+  static const String fallbackUrl = 'http://192.168.29.240:4000/api';
 
   static String _activeUrl = baseUrl;
 

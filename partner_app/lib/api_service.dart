@@ -4,7 +4,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://localhost:4000/api';
+  static const String baseUrl = 'http://athelete.upparac.com/api';
   static const String fallbackUrl = 'http://192.168.29.240:4000/api';
 
   static String _activeUrl = baseUrl;

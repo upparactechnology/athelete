@@ -54,6 +54,167 @@ List<String> _parseVenueImages(dynamic imagesData) {
   }).toList();
 }
 
+void showCancellationPolicySheet(BuildContext context) {
+  final isDark = Theme.of(context).brightness == Brightness.dark;
+  final bgCol = isDark ? const Color(0xFF181824) : Colors.white;
+  final textCol = isDark ? Colors.white : const Color(0xFF1F2937);
+  final subtextCol = isDark ? Colors.white70 : const Color(0xFF4B5563);
+  final borderCol = isDark ? Colors.white12 : Colors.black12;
+
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: BoxDecoration(
+        color: bgCol,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white30 : Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Cancellation & Refund Policy",
+                      style: GoogleFonts.sora(fontSize: 17, fontWeight: FontWeight.bold, color: textCol),
+                    ),
+                    Text(
+                      "Athlete's POV App • March 2026",
+                      style: GoogleFonts.sora(fontSize: 11, color: AppColors.pink, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: Icon(Icons.close, color: textCol),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: borderCol),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                _buildPolicySection(
+                  "1. Booking Cancellations",
+                  "Users can cancel bookings directly through the Athlete's POV app under My Bookings.\nRefund eligibility depends on when the cancellation is made:",
+                  bullets: [
+                    "24+ hours before booking: Full refund or platform credit (minus handling fee).",
+                    "6–24 hours before booking: Partial refund or credit (minus handling fee).",
+                    "Less than 6 hours before booking: No refund.",
+                    "The exact cancellation policy may vary depending on the venue or service provider."
+                  ],
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                _buildPolicySection(
+                  "2. Rescheduling",
+                  "Some bookings may allow one-time rescheduling, subject to venue availability. Rescheduling must be done before the cancellation deadline.",
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                _buildPolicySection(
+                  "3. Event & Tournament Registrations",
+                  "For tournaments, leagues, or events:",
+                  bullets: [
+                    "7+ days before event: Partial refund may be issued (subject to a 10% administrative fee).",
+                    "Less than 7 days before event: No refund.",
+                    "If an event is cancelled by the organizer or Athlete's POV, a full refund or credit may be provided."
+                  ],
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                _buildPolicySection(
+                  "4. Accidental Bookings",
+                  "If a booking is made accidentally, users must contact support within 24 hours of the transaction. Refund eligibility will depend on whether the booking has been used.",
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                _buildPolicySection(
+                  "5. Non-Refundable Situations",
+                  "Refunds will generally not be issued for:",
+                  bullets: [
+                    "No-shows",
+                    "Late cancellations",
+                    "Partially used services",
+                    "Scheduling conflicts by the user"
+                  ],
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                _buildPolicySection(
+                  "6. Refund Processing",
+                  "Approved refunds will be processed within 7–10 working days to the original payment method or as Athlete's POV credits.",
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                _buildPolicySection(
+                  "7. Policy Updates",
+                  "Athlete's POV reserves the right to update or modify this policy. Policies can change without notice.",
+                  textCol: textCol,
+                  subtextCol: subtextCol,
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _buildPolicySection(String title, String description, {List<String>? bullets, required Color textCol, required Color subtextCol}) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 20),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: GoogleFonts.sora(fontSize: 14.5, fontWeight: FontWeight.bold, color: textCol)),
+        const SizedBox(height: 6),
+        Text(description, style: GoogleFonts.sora(fontSize: 12.5, color: subtextCol, height: 1.4)),
+        if (bullets != null && bullets.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          ...bullets.map((b) => Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 6, right: 8),
+                  width: 5,
+                  height: 5,
+                  decoration: const BoxDecoration(color: AppColors.pink, shape: BoxShape.circle),
+                ),
+                Expanded(
+                  child: Text(b, style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.35)),
+                ),
+              ],
+            ),
+          )),
+        ]
+      ],
+    ),
+  );
+}
+
 Widget _buildVenueImage(String imageStr, {required double height, double? width, required BoxFit fit}) {
   if (imageStr.startsWith('data:image') || (!imageStr.startsWith('http') && !imageStr.startsWith('/') && imageStr.length > 100)) {
     try {
@@ -2889,11 +3050,20 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text("Cancellation Policy", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text("Cancellation Policy", style: GoogleFonts.sora(fontSize: 15, fontWeight: FontWeight.bold, color: textCol)),
+                                  GestureDetector(
+                                    onTap: () => showCancellationPolicySheet(context),
+                                    child: Text("View Policy →", style: GoogleFonts.sora(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.pink)),
+                                  ),
+                                ],
+                              ),
                               const SizedBox(height: 8),
                               Text(
-                                "Free cancellation up to 2 hours before your booking. Late cancellations may incur full or partial slot charges depending on host settings.",
-                                style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.4),
+                                "• 24+ hrs before booking: Full refund / credit (minus handling fee).\n• 6–24 hrs before booking: Partial refund / credit.\n• < 6 hrs before booking: Non-refundable.",
+                                style: GoogleFonts.sora(fontSize: 12, color: subtextCol, height: 1.5),
                               ),
                             ],
                           ),
@@ -4347,27 +4517,144 @@ class _BookingsTabState extends State<BookingsTab> {
     }
   }
 
-  void _cancel(String bookingId) async {
+  void _cancel(Map<String, dynamic> booking) async {
+    final String bookingId = booking['booking_id'] ?? '';
+
+    // Calculate refund eligibility
+    DateTime? slotDate;
+    if (booking['slot'] != null && booking['slot']['date'] != null) {
+      slotDate = DateTime.tryParse(booking['slot']['date'].toString());
+    }
+    String startTimeStr = booking['slot']?['start_time'] ?? "00:00";
+
+    double hoursRemaining = 48.0;
+    if (slotDate != null) {
+      final timeParts = startTimeStr.split(":");
+      final hour = timeParts.isNotEmpty ? (int.tryParse(timeParts[0]) ?? 0) : 0;
+      final minute = timeParts.length > 1 ? (int.tryParse(timeParts[1]) ?? 0) : 0;
+      final bookingStart = DateTime(slotDate.year, slotDate.month, slotDate.day, hour, minute);
+      hoursRemaining = bookingStart.difference(DateTime.now()).inMinutes / 60.0;
+    }
+
+    String refundBadge;
+    String refundNotice;
+    Color badgeColor;
+
+    if (hoursRemaining >= 24) {
+      refundBadge = "Full Refund / Credit Eligible";
+      refundNotice = "Cancelled 24+ hours before booking. Full refund or platform credit will be issued (minus handling fee).";
+      badgeColor = Colors.green;
+    } else if (hoursRemaining >= 6) {
+      refundBadge = "Partial Refund Eligible";
+      refundNotice = "Cancelled 6–24 hours before booking. Partial refund or platform credit will be issued (minus handling fee).";
+      badgeColor = Colors.orange;
+    } else {
+      refundBadge = "Non-Refundable (<6 hrs)";
+      refundNotice = "Cancelled less than 6 hours before booking. As per Athlete's POV Policy, no refund will be issued.";
+      badgeColor = Colors.redAccent;
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Cancel Booking", style: GoogleFonts.sora(fontWeight: FontWeight.bold)),
-        content: Text("Are you sure you want to cancel this booking? This will release your slot.", style: GoogleFonts.sora()),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text("No", style: GoogleFonts.sora())),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: Text("Yes, Cancel", style: GoogleFonts.sora(color: Colors.white)),
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 26),
+              const SizedBox(width: 8),
+              Expanded(child: Text("Cancel Booking", style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 17))),
+            ],
           ),
-        ],
-      ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Are you sure you want to cancel this booking? This slot will be released.",
+                    style: GoogleFonts.sora(fontSize: 13, height: 1.4)),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: badgeColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: badgeColor.withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.shield_outlined, color: badgeColor, size: 18),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(refundBadge,
+                                style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 13, color: badgeColor)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(refundNotice, style: GoogleFonts.sora(fontSize: 12, height: 1.35)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(Icons.access_time_rounded, size: 14, color: Colors.grey),
+                          const SizedBox(width: 4),
+                          Text("Processing: 7–10 working days", style: GoogleFonts.sora(fontSize: 11, color: Colors.grey)),
+                        ],
+                      )
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.pop(context, false);
+                      showCancellationPolicySheet(context);
+                    },
+                    child: Text("Read Full Cancellation Policy →",
+                        style: GoogleFonts.sora(fontSize: 11.5, fontWeight: FontWeight.bold, color: AppColors.pink)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text("Keep Booking", style: GoogleFonts.sora(color: Colors.grey[600])),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text("Confirm Cancellation", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
     );
 
     if (confirm == true) {
       setState(() => _isLoading = true);
-      await ApiService.cancelBooking(bookingId);
+      final res = await ApiService.cancelBooking(bookingId);
       _loadBookings();
+      if (mounted) {
+        final msg = res['refundMessage'] ?? "Booking cancelled successfully.";
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg, style: GoogleFonts.sora()),
+            backgroundColor: Colors.black87,
+          ),
+        );
+      }
     }
   }
 
@@ -4492,7 +4779,7 @@ class _BookingsTabState extends State<BookingsTab> {
                                       ),
                                       const SizedBox(width: 8),
                                       TextButton(
-                                        onPressed: () => _cancel(booking['booking_id']),
+                                        onPressed: () => _cancel(booking),
                                         child: Text("Cancel", style: GoogleFonts.sora(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
                                       ),
                                     ],
@@ -5157,6 +5444,8 @@ class _ProfileTabState extends State<ProfileTab> {
       ),
     );
   }
+
+
 
   void _showWebViewDialog(String title, String url) {
     if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
@@ -5873,6 +6162,13 @@ class _ProfileTabState extends State<ProfileTab> {
                             "Privacy Policy",
                             _systemSettings['privacyPolicyUrl'] ?? "https://athletepov.com/privacy",
                           ),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.assignment_return_outlined, color: AppColors.pink),
+                          title: Text("Cancellation & Refund Policy", style: TextStyle(color: textCol)),
+                          trailing: const Icon(Icons.chevron_right, size: 16),
+                          onTap: () => showCancellationPolicySheet(context),
                         ),
                         const Divider(height: 1),
                         ListTile(
