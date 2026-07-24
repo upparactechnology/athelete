@@ -10,6 +10,10 @@
     <link rel="icon" type="image/png" href="../logos/name.png">
 </head>
 <body>
+    <!-- Scroll Progress Bar -->
+    <div class="scroll-progress-container">
+        <div class="scroll-progress-bar" id="scrollProgress"></div>
+    </div>
 
     <!-- Header & Navigation -->
     <header>
@@ -41,9 +45,64 @@
         </div>
     </header>
 
+    <!-- Live Activity Marquee Ticker -->
+    <div class="live-activity-ticker">
+        <div class="ticker-track">
+            <div class="ticker-item"><span class="ticker-dot"></span> ⚡ <strong>Rahul K.</strong> booked Box Cricket Court 1 (Mumbai) • <span class="time-ago">2m ago</span></div>
+            <div class="ticker-item"><span class="ticker-dot pink"></span> 🔥 <strong>Apex Turf Arena</strong> filled 94% slots today</div>
+            <div class="ticker-item"><span class="ticker-dot green"></span> 🎾 <strong>Vikram S.</strong> locked Pickleball Court 3 • <span class="time-ago">5m ago</span></div>
+            <div class="ticker-item"><span class="ticker-dot"></span> ⚽ <strong>Downtown Turf</strong> 30% advance split settlement complete</div>
+            <div class="ticker-item"><span class="ticker-dot pink"></span> 🏆 <strong>45,000+</strong> Active Players online this week</div>
+            <!-- Duplicated for continuous loop -->
+            <div class="ticker-item"><span class="ticker-dot"></span> ⚡ <strong>Rahul K.</strong> booked Box Cricket Court 1 (Mumbai) • <span class="time-ago">2m ago</span></div>
+            <div class="ticker-item"><span class="ticker-dot pink"></span> 🔥 <strong>Apex Turf Arena</strong> filled 94% slots today</div>
+            <div class="ticker-item"><span class="ticker-dot green"></span> 🎾 <strong>Vikram S.</strong> locked Pickleball Court 3 • <span class="time-ago">5m ago</span></div>
+            <div class="ticker-item"><span class="ticker-dot"></span> ⚽ <strong>Downtown Turf</strong> 30% advance split settlement complete</div>
+            <div class="ticker-item"><span class="ticker-dot pink"></span> 🏆 <strong>45,000+</strong> Active Players online this week</div>
+        </div>
+    </div>
+
     <!-- Hero Section -->
-    <section id="hero" class="hero-section">
-        <div class="container">
+    <section id="hero" class="hero-section" style="padding-top: 60px;">
+        <div class="hero-image-overlay"></div>
+        
+        <!-- Floating 3D Sports Elements -->
+        <div class="hero-3d-elements">
+            <!-- Basketball -->
+            <div class="sports-ball-3d basketball-3d sports-float-1">
+                <div class="ring ring-y1"></div>
+                <div class="ring ring-y2"></div>
+                <div class="ring ring-x"></div>
+                <div class="ring ring-z"></div>
+            </div>
+            <!-- Football -->
+            <div class="sports-ball-3d football-3d sports-float-2">
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+                <div class="ring ring-4"></div>
+                <div class="ring ring-5"></div>
+            </div>
+            <!-- Tennis Ball -->
+            <div class="sports-ball-3d tennisball-3d sports-float-3">
+                <div class="ring ring-base"></div>
+                <div class="seam-1"></div>
+                <div class="seam-2"></div>
+            </div>
+            <!-- Cricket Ball -->
+            <div class="sports-ball-3d cricketball-3d sports-float-4">
+                <div class="ring ring-base"></div>
+                <div class="ring ring-seam"></div>
+            </div>
+            <!-- Pickleball -->
+            <div class="sports-ball-3d pickleball-3d sports-float-5">
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+            </div>
+        </div>
+
+        <div class="container" style="position: relative; z-index: 5;">
             <div class="hero-grid">
                 <!-- Hero Text Column -->
                 <div class="hero-content reveal">
@@ -74,15 +133,15 @@
 
                     <div class="hero-stats-row">
                         <div class="stat-item">
-                            <h4 class="text-gradient-orange">500+</h4>
+                            <h4 class="text-gradient-orange counter-target" data-target="500" data-suffix="+">0</h4>
                             <p>Verified Turfs</p>
                         </div>
                         <div class="stat-item">
-                            <h4 class="text-gradient-pink">50,000+</h4>
+                            <h4 class="text-gradient-pink counter-target" data-target="50000" data-suffix="+">0</h4>
                             <p>Slots Booked</p>
                         </div>
                         <div class="stat-item">
-                            <h4 class="text-gradient-blue">99.8%</h4>
+                            <h4 class="text-gradient-blue counter-target" data-target="99.8" data-suffix="%" data-decimals="1">0</h4>
                             <p>QR Scanner Speed</p>
                         </div>
                     </div>
@@ -137,7 +196,25 @@
     </section>
 
     <!-- App Feature Showcase with Dual Tab Switcher -->
-    <section id="apps" class="section-padding">
+    <section id="apps" class="section-padding" style="position: relative;">
+        <!-- Section-wide side 3D elements (no overlap) -->
+        <div class="section-3d-bg">
+            <!-- Basketball (Left) -->
+            <div class="sports-ball-3d basketball-3d static-3d-left">
+                <div class="ring ring-y1"></div>
+                <div class="ring ring-y2"></div>
+                <div class="ring ring-x"></div>
+                <div class="ring ring-z"></div>
+            </div>
+            <!-- Football (Right) -->
+            <div class="sports-ball-3d football-3d static-3d-right">
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+                <div class="ring ring-4"></div>
+                <div class="ring ring-5"></div>
+            </div>
+        </div>
         <div class="container">
             <div class="section-header reveal">
                 <span class="section-subtitle text-gradient-orange">Dual Experience Platform</span>
@@ -268,7 +345,21 @@
     </section>
 
     <!-- Popular Sports Grid (WITH CUSTOM VECTOR SVG ICONS - NO EMOJIS) -->
-    <section id="sports" class="section-padding" style="background: var(--bg-secondary); border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color);">
+    <section id="sports" class="section-padding" style="background: var(--bg-secondary); border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); position: relative;">
+        <!-- Section-wide side 3D elements (no overlap) -->
+        <div class="section-3d-bg">
+            <!-- Tennis Ball (Left) -->
+            <div class="sports-ball-3d tennisball-3d static-3d-left">
+                <div class="ring ring-base"></div>
+                <div class="seam-1"></div>
+                <div class="seam-2"></div>
+            </div>
+            <!-- Cricket Ball (Right) -->
+            <div class="sports-ball-3d cricketball-3d static-3d-right">
+                <div class="ring ring-base"></div>
+                <div class="ring ring-seam"></div>
+            </div>
+        </div>
         <div class="container">
             <div class="section-header reveal">
                 <span class="section-subtitle text-gradient-orange">Supported Activities</span>
@@ -277,8 +368,10 @@
             </div>
 
             <div class="sports-grid">
-                <!-- Cricket SVG -->
-                <div class="sport-card reveal-scale" style="transition-delay: 0.05s;">
+                <!-- Cricket -->
+                <div class="sport-card card-cricket reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1531415074968-036ba1b575da?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.05s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-cricket">🏏 OVER-BY-OVER</span>
                     <div class="sport-icon-wrapper">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M3 21l8-8"/>
@@ -289,8 +382,10 @@
                     <div class="sport-name">Box Cricket</div>
                 </div>
 
-                <!-- Football SVG -->
-                <div class="sport-card reveal-scale" style="transition-delay: 0.1s;">
+                <!-- Football -->
+                <div class="sport-card card-football reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1575361204480-aadea25e6e68?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.1s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-football">⚽ PITCH WARS</span>
                     <div class="sport-icon-wrapper">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <circle cx="12" cy="12" r="10"/>
@@ -301,8 +396,10 @@
                     <div class="sport-name">Football Turf</div>
                 </div>
 
-                <!-- Badminton SVG -->
-                <div class="sport-card reveal-scale" style="transition-delay: 0.15s;">
+                <!-- Badminton -->
+                <div class="sport-card card-badminton reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.15s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-badminton">🏸 SMASH DEUCE</span>
                     <div class="sport-icon-wrapper">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <ellipse cx="9" cy="9" rx="6" ry="6"/>
@@ -313,8 +410,10 @@
                     <div class="sport-name">Badminton</div>
                 </div>
 
-                <!-- Tennis SVG -->
-                <div class="sport-card reveal-scale" style="transition-delay: 0.2s;">
+                <!-- Tennis -->
+                <div class="sport-card card-tennis reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.2s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-tennis">🎾 ACE VIBES</span>
                     <div class="sport-icon-wrapper">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <circle cx="12" cy="12" r="10"/>
@@ -324,8 +423,10 @@
                     <div class="sport-name">Tennis Court</div>
                 </div>
 
-                <!-- Pickleball SVG -->
-                <div class="sport-card reveal-scale" style="transition-delay: 0.25s;">
+                <!-- Pickleball -->
+                <div class="sport-card card-pickleball reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1622279457486-62dcc4a431d6?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.25s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-pickleball">😎 DINK ONLY</span>
                     <div class="sport-icon-wrapper">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="5" y="3" width="14" height="12" rx="6"/>
@@ -337,8 +438,10 @@
                     <div class="sport-name">Pickleball</div>
                 </div>
 
-                <!-- Basketball SVG -->
-                <div class="sport-card reveal-scale" style="transition-delay: 0.3s;">
+                <!-- Basketball -->
+                <div class="sport-card card-basketball reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1546519638-68e109498ffc?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.3s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-basketball">🏀 HOOP LIFE</span>
                     <div class="sport-icon-wrapper">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <circle cx="12" cy="12" r="10"/>
@@ -347,12 +450,202 @@
                     </div>
                     <div class="sport-name">Basketball</div>
                 </div>
+
+                <!-- Volleyball -->
+                <div class="sport-card card-volleyball reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1612872087720-bb876e2e67d1?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.35s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-volleyball">🏐 SPIKE IT</span>
+                    <div class="sport-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10M12 2a15.3 15.3 0 0 0-4 10 15.3 15.3 0 0 0 4 10M2 12h20"/>
+                        </svg>
+                    </div>
+                    <div class="sport-name">Volleyball Turf</div>
+                </div>
+
+                <!-- Table Tennis -->
+                <div class="sport-card card-tabletennis reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1611251135345-18c56206b863?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.4s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-tabletennis">🏓 SPIN WARS</span>
+                    <div class="sport-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="9" cy="9" r="6"/>
+                            <path d="M13.2 13.2L21 21M9 15a4 4 0 0 0 4-4"/>
+                            <circle cx="17" cy="7" r="1"/>
+                        </svg>
+                    </div>
+                    <div class="sport-name">Table Tennis Arena</div>
+                </div>
+
+                <!-- Skate Park -->
+                <div class="sport-card card-skate reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1564982752979-3f7bc974d29a?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.45s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-skate">🛹 GRIND TIME</span>
+                    <div class="sport-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="9" width="20" height="4" rx="2"/>
+                            <circle cx="6" cy="15" r="2"/>
+                            <circle cx="18" cy="15" r="2"/>
+                        </svg>
+                    </div>
+                    <div class="sport-name">Skate Park</div>
+                </div>
+
+                <!-- E-Sports -->
+                <div class="sport-card card-esports reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.5s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-esports">🎮 CLUTCH UP</span>
+                    <div class="sport-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/>
+                            <circle cx="15" cy="13" r="1"/><circle cx="18" cy="11" r="1"/>
+                            <path d="M21 7.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v9a4 4 0 0 0 4 4h10a4 4 0 0 0 4-4v-9z"/>
+                        </svg>
+                    </div>
+                    <div class="sport-name">E-Sports Hub</div>
+                </div>
+
+                <!-- Rock Climbing -->
+                <div class="sport-card card-climb reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1522163182402-834f871fd851?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.55s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-climb">🧗 SEND IT</span>
+                    <div class="sport-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 10l-5-6-5 6h10z M2 20h20L12 8l-10 12z"/>
+                        </svg>
+                    </div>
+                    <div class="sport-name">Rock Climbing</div>
+                </div>
+
+                <!-- Ultimate Frisbee -->
+                <div class="sport-card card-frisbee reveal-scale" style="--sport-bg: url('https://images.unsplash.com/photo-1551698618-1dfe5d97d256?auto=format&fit=crop&w=600&q=80'); transition-delay: 0.6s;">
+                    <div class="sport-card-bg"></div>
+                    <span class="genz-tag tag-frisbee">🥏 FLIGHT VIBES</span>
+                    <div class="sport-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <ellipse cx="12" cy="12" rx="10" ry="4"/>
+                            <ellipse cx="12" cy="12" rx="6" ry="2.5"/>
+                        </svg>
+                    </div>
+                    <div class="sport-name">Ultimate Frisbee</div>
+                </div>
+        </div>
+    </section>
+
+    <!-- Featured Live Venues & Courts Showcase (Realistic Turfs) -->
+    <section id="venues" class="section-padding" style="background: var(--bg-primary); position: relative;">
+        <div class="container">
+            <div class="section-header reveal">
+                <span class="section-subtitle text-gradient-orange">Live Nearby Facilities</span>
+                <h2 class="section-title text-gradient">Top-Rated Turfs & Arenas</h2>
+                <p class="section-desc">Real-time venue availability across premier sports hubs with instant slot reservation and 30/70 split cash lock.</p>
+            </div>
+
+            <div class="venues-grid">
+                <!-- Venue 1: Box Cricket & Turf -->
+                <div class="venue-card reveal" style="transition-delay: 0.1s;">
+                    <div class="venue-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1531415074968-036ba1b575da?auto=format&fit=crop&w=700&q=80" alt="Apex Box Cricket Turf" class="venue-img">
+                        <span class="venue-badge-sport">Box Cricket & Football</span>
+                        <span class="venue-badge-status"><span class="venue-status-dot"></span> 4 Slots Open</span>
+                    </div>
+                    <div class="venue-info">
+                        <div class="venue-header-row">
+                            <h3 class="venue-title">Apex Arena Turf</h3>
+                            <span class="venue-rating">★ 4.9 <span style="color: var(--text-muted); font-size: 0.7rem;">(184)</span></span>
+                        </div>
+                        <p class="venue-location">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                            Andheri West, Mumbai • 1.2 km away
+                        </p>
+                        <div class="venue-footer-row">
+                            <div>
+                                <span class="venue-price-tag">₹1,200</span>
+                                <span class="venue-price-unit">/ hr</span>
+                            </div>
+                            <a href="#simulator" class="btn btn-primary btn-sm">Reserve Slot</a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Venue 2: Badminton & Tennis Hub -->
+                <div class="venue-card reveal" style="transition-delay: 0.2s;">
+                    <div class="venue-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?auto=format&fit=crop&w=700&q=80" alt="Smash Badminton Complex" class="venue-img">
+                        <span class="venue-badge-sport">Badminton & Pickleball</span>
+                        <span class="venue-badge-status"><span class="venue-status-dot"></span> 2 Slots Open</span>
+                    </div>
+                    <div class="venue-info">
+                        <div class="venue-header-row">
+                            <h3 class="venue-title">Smash Badminton Complex</h3>
+                            <span class="venue-rating">★ 4.8 <span style="color: var(--text-muted); font-size: 0.7rem;">(126)</span></span>
+                        </div>
+                        <p class="venue-location">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                            Koramangala, Bengaluru • 0.8 km away
+                        </p>
+                        <div class="venue-footer-row">
+                            <div>
+                                <span class="venue-price-tag">₹600</span>
+                                <span class="venue-price-unit">/ hr</span>
+                            </div>
+                            <a href="#simulator" class="btn btn-primary btn-sm">Reserve Slot</a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Venue 3: Multisport Floodlight Arena -->
+                <div class="venue-card reveal" style="transition-delay: 0.3s;">
+                    <div class="venue-img-wrapper">
+                        <img src="https://images.unsplash.com/photo-1575361204480-aadea25e6e68?auto=format&fit=crop&w=700&q=80" alt="ProStrike Football Park" class="venue-img">
+                        <span class="venue-badge-sport">FIFA Football & Rugby</span>
+                        <span class="venue-badge-status"><span class="venue-status-dot"></span> 6 Slots Open</span>
+                    </div>
+                    <div class="venue-info">
+                        <div class="venue-header-row">
+                            <h3 class="venue-title">ProStrike Sports Park</h3>
+                            <span class="venue-rating">★ 5.0 <span style="color: var(--text-muted); font-size: 0.7rem;">(210)</span></span>
+                        </div>
+                        <p class="venue-location">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                            Gurugram Phase 5, Delhi NCR • 2.5 km away
+                        </p>
+                        <div class="venue-footer-row">
+                            <div>
+                                <span class="venue-price-tag">₹1,600</span>
+                                <span class="venue-price-unit">/ hr</span>
+                            </div>
+                            <a href="#simulator" class="btn btn-primary btn-sm">Reserve Slot</a>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </section>
 
+    <!-- Parallax Divider Section -->
+    <div class="parallax-divider-section">
+        <div class="parallax-overlay"></div>
+        <div class="container parallax-content">
+            <h2 class="parallax-quote text-gradient-orange">"Instantly lock slots, focus entirely on the game."</h2>
+            <p class="parallax-author">— APOV ECOSYSTEM</p>
+        </div>
+    </div>
+
     <!-- Interactive Live Booking Simulator Section -->
-    <section id="simulator" class="simulator-section section-padding">
+    <section id="simulator" class="simulator-section section-padding" style="position: relative;">
+        <!-- Section-wide side 3D elements (no overlap) -->
+        <div class="section-3d-bg">
+            <!-- Pickleball (Left) -->
+            <div class="sports-ball-3d pickleball-3d static-3d-left">
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+            </div>
+            <!-- 3D Ring Element (Right) -->
+            <div class="ring-3d static-3d-right"></div>
+        </div>
         <div class="container">
             <div class="section-header reveal">
                 <span class="section-subtitle text-gradient-orange">Interactive Demonstration</span>
@@ -372,24 +665,40 @@
 
                     <div class="sport-selector">
                         <button class="sport-chip active" data-sport="Box Cricket">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21l8-8"/><circle cx="6" cy="6" r="3"/></svg>
                             <span>Box Cricket</span>
                         </button>
                         <button class="sport-chip" data-sport="Football">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
                             <span>Football</span>
                         </button>
                         <button class="sport-chip" data-sport="Badminton">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="9" cy="9" rx="6" ry="6"/><path d="M13.2 13.2L21 21"/></svg>
                             <span>Badminton</span>
                         </button>
                         <button class="sport-chip" data-sport="Tennis">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
                             <span>Tennis</span>
                         </button>
                         <button class="sport-chip" data-sport="Pickleball">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="12" rx="6"/><path d="M12 15v6"/></svg>
                             <span>Pickleball</span>
+                        </button>
+                        <button class="sport-chip" data-sport="Basketball">
+                            <span>Basketball</span>
+                        </button>
+                        <button class="sport-chip" data-sport="Volleyball">
+                            <span>Volleyball</span>
+                        </button>
+                        <button class="sport-chip" data-sport="Table Tennis">
+                            <span>Table Tennis</span>
+                        </button>
+                        <button class="sport-chip" data-sport="Skate Park">
+                            <span>Skate Park</span>
+                        </button>
+                        <button class="sport-chip" data-sport="E-Sports Hub">
+                            <span>E-Sports Hub</span>
+                        </button>
+                        <button class="sport-chip" data-sport="Rock Climbing">
+                            <span>Rock Climbing</span>
+                        </button>
+                        <button class="sport-chip" data-sport="Ultimate Frisbee">
+                            <span>Frisbee</span>
                         </button>
                     </div>
 
@@ -454,35 +763,69 @@
                     </div>
                 </div>
 
-                <!-- Live Generated E-Ticket Preview -->
-                <div class="ticket-preview-box reveal-right">
-                    <span class="ticket-badge">VALID E-TICKET</span>
-                    <div class="ticket-header">
-                        <h4 id="ticket-sport-name">Box Cricket Booking</h4>
-                        <span class="ticket-id">TICKET #APV-2026-X8921</span>
-                    </div>
+                <!-- Live Generated 3D Flipping E-Ticket Pass -->
+                <div class="ticket-card-3d-container reveal-right">
+                    <div class="ticket-card-3d-inner">
+                        <!-- Front Face: E-Ticket Pass -->
+                        <div class="ticket-card-face ticket-face-front">
+                            <span class="ticket-badge">VALID E-TICKET</span>
+                            <div class="ticket-header">
+                                <h4 id="ticket-sport-name">Box Cricket Booking</h4>
+                                <span class="ticket-id">TICKET #APV-2026-X8921</span>
+                            </div>
 
-                    <div style="font-size: 0.85rem; margin-bottom: 12px; color: var(--text-secondary);">
-                        <div>📍 Venue: Apex Sports Turf, Court 1</div>
-                        <div>📅 Date: Today (24 Jul 2026)</div>
-                        <div>⏰ Slot: 07:00 PM - 08:00 PM</div>
-                    </div>
+                            <div style="font-size: 0.85rem; margin-bottom: 12px; color: var(--text-secondary);">
+                                <div>📍 Venue: Apex Sports Turf, Court 1</div>
+                                <div>📅 Date: Today (24 Jul 2026)</div>
+                                <div>⏰ Slot: 07:00 PM - 08:00 PM</div>
+                            </div>
 
-                    <div class="ticket-qr-area">
-                        <div class="qr-code-dummy">
-                            <svg viewBox="0 0 100 100">
-                                <path d="M0,0 h30 v30 h-30 z M10,10 h10 v10 h-10 z M70,0 h30 v30 h-30 z M80,10 h10 v10 h-10 z M0,70 h30 v30 h-30 z M10,80 h10 v10 h-10 z M40,10 h10 v10 h-10 z M50,40 h20 v10 h-20 z M30,50 h10 v30 h-10 z M70,70 h20 v20 h-20 z"/>
-                            </svg>
+                            <div class="ticket-qr-area">
+                                <div class="qr-code-dummy">
+                                    <svg viewBox="0 0 100 100">
+                                        <path d="M0,0 h30 v30 h-30 z M10,10 h10 v10 h-10 z M70,0 h30 v30 h-30 z M80,10 h10 v10 h-10 z M0,70 h30 v30 h-30 z M10,80 h10 v10 h-10 z M40,10 h10 v10 h-10 z M50,40 h20 v10 h-20 z M30,50 h10 v30 h-10 z M70,70 h20 v20 h-20 z"/>
+                                    </svg>
+                                </div>
+                                <div class="qr-info">
+                                    <h6>Scan at Entry Counter</h6>
+                                    <p id="ticket-amount-paid">₹374 (Deposit Paid Online)</p>
+                                    <p style="font-size: 0.75rem; color: #10b981; font-weight: 700; margin-top: 4px;">Remaining 70% cash payable to host</p>
+                                </div>
+                            </div>
+
+                            <div style="text-align: center; margin-top: 16px;">
+                                <button class="btn btn-primary btn-sm" style="width: 100%;" onclick="event.stopPropagation(); alert('Simulated Checkout Success! Ticket QR generated.')">Simulate Instant Checkout</button>
+                            </div>
+                            <div class="card-flip-hint">Hover to Flip to Back 🔄</div>
                         </div>
-                        <div class="qr-info">
-                            <h6>Scan at Entry Counter</h6>
-                            <p id="ticket-amount-paid">₹374 (Deposit Paid Online)</p>
-                            <p style="font-size: 0.75rem; color: #10b981; font-weight: 700; margin-top: 4px;">Remaining 70% cash payable to host</p>
-                        </div>
-                    </div>
 
-                    <div style="text-align: center; margin-top: 16px;">
-                        <button class="btn btn-primary btn-sm" style="width: 100%;" onclick="alert('Simulated Checkout Success! Ticket QR generated.')">Simulate Instant Checkout</button>
+                        <!-- Back Face: Venue Rules & Security Seal -->
+                        <div class="ticket-card-face ticket-face-back">
+                            <span class="ticket-badge" style="background: rgba(59, 130, 246, 0.15); color: var(--accent-blue);">VENUE PASS TERMS</span>
+                            <div class="ticket-header">
+                                <h4>Apex Sports Turf Rules</h4>
+                                <span class="ticket-id" style="color: var(--accent-pink);">RFID SECURE SIGN</span>
+                            </div>
+
+                            <div class="venue-rules-list" style="font-size: 0.78rem; text-align: left; margin: 15px 0; display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary);">
+                                <div>👟 <strong>Footwear:</strong> Only non-marking shoes allowed.</div>
+                                <div>⏰ <strong>Punctuality:</strong> Arrive 10 mins prior to slots.</div>
+                                <div>🚫 <strong>Strict:</strong> No smoking or plastic bottles.</div>
+                                <div>🔄 <strong>Rescheduling:</strong> Cancellation up to 4 hrs.</div>
+                            </div>
+
+                            <div class="hologram-seal-wrapper">
+                                <div class="hologram-seal">
+                                    <div class="seal-logo">APOV</div>
+                                    <div class="seal-glow"></div>
+                                </div>
+                                <div class="hologram-desc">
+                                    <h6>Digitally Verified Pass</h6>
+                                    <p>APOV-2026 Key Verified</p>
+                                </div>
+                            </div>
+                            <div class="card-flip-hint">Hover to Flip to Front 🔄</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -490,16 +833,42 @@
     </section>
 
     <!-- Partner Revenue & Payout Calculator -->
-    <section id="calculator" class="section-padding">
-        <div class="container">
+    <section id="calculator" class="section-padding" style="position: relative; overflow: hidden;">
+        <!-- Section-wide side 3D elements (no overlap) -->
+        <div class="section-3d-bg">
+            <!-- 3D Football (Left) -->
+            <div class="sports-ball-3d football-3d static-3d-left">
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+            </div>
+            <!-- 3D Basketball (Right) -->
+            <div class="sports-ball-3d basketball-3d static-3d-right">
+                <div class="ring ring-y1"></div>
+                <div class="ring ring-y2"></div>
+                <div class="ring ring-x"></div>
+            </div>
+        </div>
+
+        <div class="container" style="position: relative; z-index: 2;">
             <div class="section-header reveal">
                 <span class="section-subtitle text-gradient-pink">Venue Host Earnings</span>
                 <h2 class="section-title text-gradient">Partner Revenue & Payout Calculator</h2>
                 <p class="section-desc">Estimate your potential monthly earnings when listing courts and grounds on the APOV Partner Platform.</p>
             </div>
 
-            <div style="max-width: 780px; margin: 0 auto;">
+            <div style="max-width: 780px; margin: 0 auto; position: relative;">
+                <!-- 3D Floating Currency Badges -->
+                <div class="floating-3d-coin coin-left">₹</div>
+                <div class="floating-3d-coin coin-right">%</div>
+
                 <div class="calc-card reveal-scale">
+                    <!-- 3D Header Badge -->
+                    <div class="calc-3d-badge">
+                        <span class="pulse-dot-pink"></span>
+                        <span>⚡ REAL-TIME PAYOUT SIMULATOR</span>
+                    </div>
+
                     <!-- Controls -->
                     <div class="calc-control">
                         <label for="calc-courts">
@@ -527,17 +896,17 @@
 
                     <!-- Calculated Output Results Grid -->
                     <div class="calc-results-grid">
-                        <div class="result-box">
+                        <div class="result-box 3d-depth-box">
                             <h5>Gross Monthly Revenue</h5>
                             <p id="calc-gross-monthly">₹4,32,000</p>
                         </div>
 
-                        <div class="result-box">
+                        <div class="result-box 3d-depth-box">
                             <h5>Platform Fee Deduction</h5>
                             <p id="calc-comm-deduct" style="font-size: 1.1rem; color: #f87171;">-₹15,293 (3% + GST)</p>
                         </div>
 
-                        <div class="result-box highlight-pink" style="grid-column: 1 / -1;">
+                        <div class="result-box highlight-pink 3d-depth-payout" style="grid-column: 1 / -1;">
                             <h5>Estimated Net Monthly Bank Payout</h5>
                             <p id="calc-net-payout">₹4,16,707</p>
                             <span style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; display: block;">Transferred automatically into your bank account every weekly payout cycle via Razorpay.</span>
@@ -549,7 +918,7 @@
     </section>
 
     <!-- Platform Revenue & Architecture Section -->
-    <section id="architecture" class="section-padding" style="background: var(--bg-secondary); border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color);">
+    <section id="architecture" class="section-padding" style="background: var(--bg-secondary); border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); position: relative; overflow: hidden;">
         <div class="container">
             <div class="section-header reveal">
                 <span class="section-subtitle text-gradient-blue">Transparent Ecosystem</span>
@@ -586,8 +955,23 @@
     </section>
 
     <!-- FAQ Section -->
-    <section id="faq" class="section-padding">
-        <div class="container">
+    <section id="faq" class="section-padding" style="position: relative; overflow: hidden;">
+        <!-- Section-wide side 3D elements (no overlap) -->
+        <div class="section-3d-bg">
+            <!-- 3D Pickleball (Left) -->
+            <div class="sports-ball-3d pickleball-3d static-3d-left">
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+            </div>
+            <!-- 3D Cricket Ball (Right) -->
+            <div class="sports-ball-3d cricketball-3d static-3d-right">
+                <div class="ring ring-base"></div>
+                <div class="ring ring-seam"></div>
+            </div>
+        </div>
+
+        <div class="container" style="position: relative; z-index: 2;">
             <div class="section-header reveal">
                 <span class="section-subtitle text-gradient-orange">Got Questions?</span>
                 <h2 class="section-title text-gradient">Frequently Asked Questions</h2>
@@ -639,8 +1023,24 @@
     </section>
 
     <!-- Download & Registration CTA Section -->
-    <section id="download" class="cta-section">
-        <div class="container">
+    <section id="download" class="cta-section" style="position: relative; overflow: hidden;">
+        <!-- Section-wide side 3D elements (no overlap) -->
+        <div class="section-3d-bg">
+            <!-- 3D Basketball (Left) -->
+            <div class="sports-ball-3d basketball-3d static-3d-left">
+                <div class="ring ring-y1"></div>
+                <div class="ring ring-y2"></div>
+                <div class="ring ring-x"></div>
+            </div>
+            <!-- 3D Tennis Ball (Right) -->
+            <div class="sports-ball-3d tennisball-3d static-3d-right">
+                <div class="ring ring-base"></div>
+                <div class="seam-1"></div>
+                <div class="seam-2"></div>
+            </div>
+        </div>
+
+        <div class="container" style="position: relative; z-index: 2;">
             <div class="cta-box reveal-scale">
                 <h2 class="cta-title text-gradient">Ready to Play or Grow Your Venue?</h2>
                 <p class="cta-desc" style="font-size: 0.95rem; max-width: 550px; margin: 0 auto 28px; color: var(--text-secondary);">Download the APOV Player App to reserve turfs near you, or register on the APOV Partner App to transform your sports venue operations today.</p>

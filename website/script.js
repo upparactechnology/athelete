@@ -106,7 +106,13 @@ document.addEventListener('DOMContentLoaded', () => {
     'Badminton': 400,
     'Tennis': 800,
     'Pickleball': 600,
-    'Basketball': 1000
+    'Basketball': 1000,
+    'Volleyball': 900,
+    'Table Tennis': 300,
+    'Skate Park': 500,
+    'E-Sports Hub': 400,
+    'Rock Climbing': 700,
+    'Ultimate Frisbee': 600
   };
 
   sportChips.forEach(chip => {
@@ -204,6 +210,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (grossMonthlyEl) grossMonthlyEl.innerText = `₹${grossMonthly.toLocaleString()}`;
     if (commDeductEl) commDeductEl.innerText = `-₹${totalFees.toLocaleString()} (3% + GST)`;
     if (netPayoutEl) netPayoutEl.innerText = `₹${netPayout.toLocaleString()}`;
+
+    // 3D Payout Box Animation Pop
+    const payoutBox = document.querySelector('.3d-depth-payout');
+    if (payoutBox) {
+      payoutBox.style.transform = 'translateZ(65px) scale(1.04)';
+      setTimeout(() => {
+        payoutBox.style.transform = '';
+      }, 180);
+    }
   }
 
   if (courtsSlider && hoursSlider && rateSlider) {
@@ -248,4 +263,81 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
+
+  // 8. Scroll Progress Indicator
+  const scrollProgressBar = document.getElementById('scrollProgress');
+  window.addEventListener('scroll', () => {
+    const winScroll = document.body.scrollTop || document.documentElement.scrollTop;
+    const height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+    const scrolled = (winScroll / height) * 100;
+    if (scrollProgressBar) {
+      scrollProgressBar.style.width = scrolled + "%";
+    }
+  });
+
+  // 9. Custom 3D Mouse Glow & Tilt Effect on Cards
+  const interactiveCards = document.querySelectorAll('.feature-card, .sport-card, .result-box, .sim-box, .ticket-preview-box, .app-preview-card');
+  interactiveCards.forEach(card => {
+    card.addEventListener('mousemove', e => {
+      const rect = card.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      card.style.setProperty('--mouse-x', `${x}px`);
+      card.style.setProperty('--mouse-y', `${y}px`);
+      
+      const width = rect.width;
+      const height = rect.height;
+      const centerX = width / 2;
+      const centerY = height / 2;
+      
+      const rotateY = ((x - centerX) / centerX) * 8;
+      const rotateX = ((centerY - y) / centerY) * 8;
+      
+      card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
+      card.style.transition = 'transform 0.1s ease-out, box-shadow 0.3s ease';
+    });
+    
+    card.style.transformStyle = 'preserve-3d';
+    
+    card.addEventListener('mouseleave', () => {
+      card.style.transform = `perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)`;
+      card.style.transition = 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease';
+    });
+  });
+
+  // 10. Animated Numerical Counters on Scroll
+  const counters = document.querySelectorAll('.counter-target');
+  if (counters.length > 0 && 'IntersectionObserver' in window) {
+    const counterObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const el = entry.target;
+          const target = parseFloat(el.getAttribute('data-target') || '0');
+          const suffix = el.getAttribute('data-suffix') || '';
+          const decimals = parseInt(el.getAttribute('data-decimals') || '0');
+          const duration = 1800;
+          const startTime = performance.now();
+
+          function updateCounter(now) {
+            const elapsed = now - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const easeProgress = 1 - (1 - progress) * (1 - progress);
+            const current = target * easeProgress;
+
+            el.innerText = (decimals > 0 ? current.toFixed(decimals) : Math.floor(current).toLocaleString()) + suffix;
+
+            if (progress < 1) {
+              requestAnimationFrame(updateCounter);
+            }
+          }
+
+          requestAnimationFrame(updateCounter);
+          observer.unobserve(el);
+        }
+      });
+    }, { threshold: 0.3 });
+
+    counters.forEach(counter => counterObserver.observe(counter));
+  }
 });
