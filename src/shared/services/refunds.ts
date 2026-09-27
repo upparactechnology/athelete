@@ -356,125 +356,153 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
     throw new ValidationError(`Refund not eligible (${quote.eligibility})`);
   }
 
-  // Serialize the decision phase in Postgres so concurrent requests (even
-  // across instances / Redis outages) share one outcome. $queryRaw
-  // parameterizes the booking id (never interpolate request input into SQL).
-  // Decision order (P2-final): fresh pending -> IN_FLIGHT; stale pending ->
-  // reconcile first; ALREADY_REFUNDED only with no pending intent; else a
-  // fresh intent may be created.
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('refund:' || ${req.bookingId}))`;
+  // Claim attempts run in FRESH transactions. If an attempt's intent INSERT
+  // hits the pending-refund unique index (P2002), that transaction is
+  // POISONED and unusable; the marker aborts it and the next attempt
+  // re-acquires the advisory lock and re-reads the ledger. Bounded so a
+  // pathological conflict can never spin forever; exhaustion surfaces a
+  // controlled retryable error (never a raw DB error).
+  const MAX_CLAIM_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_CLAIM_ATTEMPTS; attempt += 1) {
+    try {
+      const claimed: any = await prisma.$transaction((tx: any) =>
+        claimRefundIntent(tx, { req, booking, capture, paymentId, mockPayment, quote, now })
+      );
+      if (claimed?.intent) {
+        return driveRefundIntent(claimed.intent, claimed.amount, paymentId, mockPayment, capture, booking, claimed.quote);
+      }
+      return claimed as RefundOutcome;
+    } catch (err: any) {
+      if (err instanceof RefundIntentConflictError && attempt < MAX_CLAIM_ATTEMPTS) {
+        continue;
+      }
+      if (err instanceof RefundIntentConflictError) {
+        throw new ValidationError('Refund request conflicted; please retry');
+      }
+      throw err;
+    }
+  }
+  throw new ValidationError('Refund request conflicted; please retry');
+}
 
-    const readRefundRows = async () => {
-      const [successRows, pendingRows] = await Promise.all([
-        tx.transaction.findMany({
-          where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
-          select: { amount: true },
-        }),
-        tx.transaction.findMany({
-          where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'pending' },
-          select: { txn_id: true, amount: true, created_at: true, razorpay_payment_id: true, booking_id: true },
-        }),
-      ]);
-      return { successRows, pendingRows };
-    };
+/**
+ * Internal marker: the intent INSERT hit the pending-refund unique index.
+ * The enclosing interactive transaction is POISONED at this point (a failed
+ * statement aborts the PostgreSQL transaction), so NO further query may run
+ * on it. The marker aborts the tx; the caller retries in a FRESH
+ * transaction (re-lock, re-read, re-evaluate). Never surfaces to clients.
+ */
+class RefundIntentConflictError extends Error {
+  constructor() {
+    super('refund-intent-conflict');
+    this.name = 'RefundIntentConflictError';
+  }
+}
 
-    let { successRows, pendingRows } = await readRefundRows();
-    let readiness = evaluateRefundReadiness({
-      capturedAmount: Number(booking.online_amount),
-      successAmounts: successRows.map((r) => Number(r.amount)),
+interface RefundClaimContext {
+  req: RefundRequest;
+  booking: any;
+  capture: any;
+  paymentId: string;
+  mockPayment: boolean;
+  quote: { amount: number; eligibility: string };
+  now: Date;
+}
+
+/**
+ * Decision + intent-claim phase, run INSIDE one advisory-locked
+ * transaction. Either returns a final outcome, returns claim data for the
+ * post-commit gateway drive, or throws (including RefundIntentConflictError
+ * on P2002, which must abort this tx without further queries on it).
+ * Exported for unit tests (transaction-boundary assertions).
+ */
+export async function claimRefundIntent(tx: any, ctx: RefundClaimContext): Promise<any> {
+  const { req, booking, capture, paymentId, mockPayment, quote, now } = ctx;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('refund:' || ${req.bookingId}))`;
+
+  const readRefundRows = async () => {
+    const [successRows, pendingRows] = await Promise.all([
+      tx.transaction.findMany({
+        where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
+        select: { amount: true },
+      }),
+      tx.transaction.findMany({
+        where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'pending' },
+        select: { txn_id: true, amount: true, created_at: true, razorpay_payment_id: true, booking_id: true },
+      }),
+    ]);
+    return { successRows, pendingRows };
+  };
+
+  let { successRows, pendingRows } = await readRefundRows();
+  let readiness = evaluateRefundReadiness({
+    capturedAmount: Number(booking.online_amount),
+    successAmounts: successRows.map((r: any) => Number(r.amount)),
+    pendingRows,
+    quotedAmount: Number(quote.amount.toFixed(2)),
+    nowMs: now.getTime(),
+    staleMs: PENDING_STALE_MS,
+  });
+
+  if (readiness.action === 'in_flight') {
+    const row = readiness.row;
+    return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: readiness.reason } as RefundOutcome;
+  }
+
+  if (readiness.action === 'reconcile') {
+    const recovered = await reconcileStalePending(tx as any, readiness.row, paymentId, mockPayment, quote.eligibility);
+    if (recovered) return recovered;
+      ({ successRows, pendingRows } = await readRefundRows());
+      readiness = evaluateRefundReadiness({
+        capturedAmount: Number(booking.online_amount),
+        successAmounts: successRows.map((r: any) => Number(r.amount)),
       pendingRows,
       quotedAmount: Number(quote.amount.toFixed(2)),
       nowMs: now.getTime(),
       staleMs: PENDING_STALE_MS,
     });
-
     if (readiness.action === 'in_flight') {
       const row = readiness.row;
       return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: readiness.reason } as RefundOutcome;
     }
-
     if (readiness.action === 'reconcile') {
-      const recovered = await reconcileStalePending(tx as any, readiness.row, paymentId, mockPayment, quote.eligibility);
-      if (recovered) return recovered;
-      // Superseded (or converged without success): re-read and re-evaluate
-      // before deciding ALREADY_REFUNDED vs a fresh intent.
-      ({ successRows, pendingRows } = await readRefundRows());
-      readiness = evaluateRefundReadiness({
-        capturedAmount: Number(booking.online_amount),
-        successAmounts: successRows.map((r) => Number(r.amount)),
-        pendingRows,
-        quotedAmount: Number(quote.amount.toFixed(2)),
-        nowMs: now.getTime(),
-        staleMs: PENDING_STALE_MS,
-      });
-      if (readiness.action === 'in_flight') {
-        const row = readiness.row;
-        return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: readiness.reason } as RefundOutcome;
-      }
-      if (readiness.action === 'reconcile') {
-        // A new stale row appeared mid-flow (practically impossible under
-        // the advisory lock): stay safe and report in-flight.
-        const row = readiness.row;
-        return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
-      }
+      const row = readiness.row;
+      return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
     }
+  }
 
-    if (readiness.action === 'already_refunded') {
-      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
-    }
-    const amount = readiness.action === 'create' ? readiness.amount : 0;
-    if (amount <= 0) {
-      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
-    }
+  if (readiness.action === 'already_refunded') {
+    throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
+  }
+  const amount = readiness.action === 'create' ? readiness.amount : 0;
+  if (amount <= 0) {
+    throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
+  }
 
-    // Durable intent first; gateway call happens after commit (see below).
-    // Exactly one pending intent per booking is enforced by the partial
-    // unique index; losers get P2002 and converge on the winner.
-    let intent: any;
-    try {
-      intent = await tx.transaction.create({
-        data: {
-          booking_id: req.bookingId,
-          razorpay_order_id: capture.razorpay_order_id,
-          razorpay_payment_id: null,
-          txn_type: 'refund',
-          txn_status: 'pending',
-          amount,
-        },
-      });
-    } catch (err: any) {
-      if (err?.code === 'P2002') {
-        // Another request won the single pending-intent slot: converge on
-        // the true ledger state (totals recomputed; partial success is NOT
-        // reported as fully refunded). A null return means the slot freed
-        // up — retry the create exactly once.
-        const converged = await convergeOnRefundWinner(
-          tx, { booking_id: req.bookingId, txn_id: '', amount },
-          quote.eligibility
-        );
-        if (converged) return converged as RefundOutcome;
-        intent = await tx.transaction.create({
-          data: {
-            booking_id: req.bookingId,
-            razorpay_order_id: capture.razorpay_order_id,
-            razorpay_payment_id: null,
-            txn_type: 'refund',
-            txn_status: 'pending',
-            amount,
-          },
-        });
-      } else {
-        throw err;
-      }
+  // Durable intent first; gateway call happens after commit (see caller).
+  // Exactly one pending intent per booking is enforced by the partial
+  // unique index. On P2002 the transaction is POISONED: throw the marker
+  // immediately with NO further query on this tx; the caller retries the
+  // whole claim phase in a fresh transaction.
+  let intent: any;
+  try {
+    intent = await tx.transaction.create({
+      data: {
+        booking_id: req.bookingId,
+        razorpay_order_id: capture.razorpay_order_id,
+        razorpay_payment_id: null,
+        txn_type: 'refund',
+        txn_status: 'pending',
+        amount,
+      },
+    });
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      throw new RefundIntentConflictError();
     }
-    return { intent, amount, capture, booking, quote } as any;
-  }).then(async (claimed: any) => {
-    if (claimed?.intent) {
-      return driveRefundIntent(claimed.intent, claimed.amount, paymentId, mockPayment, capture, booking, claimed.quote);
-    }
-    return claimed as RefundOutcome;
-  });
+    throw err;
+  }
+  return { intent, amount, capture, booking, quote };
 }
 
 /**

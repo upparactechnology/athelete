@@ -834,6 +834,7 @@ import {
   driveRefundIntent,
 } from '../src/shared/services/refunds.js';
 import { claimCouponUsage, recordCouponRedemption } from '../src/shared/services/coupons.js';
+import { claimRefundIntent } from '../src/shared/services/refunds.js';
 
 describe('Refund creation states (UNIT)', () => {
   it('processed response -> local SUCCESS', () => {
@@ -1399,3 +1400,149 @@ describe('Converge ledger truth (UNIT, fake DB)', () => {
     expect(d).toMatchObject({ action: 'wait' });
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* P2002 transaction-boundary: after a unique violation NOTHING may    */
+/* run on the poisoned tx; convergence happens in a FRESH transaction. */
+/* UNIT (op-logging fakes). Live PG concurrency NOT TESTED.            */
+/* ------------------------------------------------------------------ */
+
+function makeRefundClaimTx(opts: {
+  successAmounts?: number[];
+  pending?: Array<{ ageMs: number; amount: number; status?: string }>;
+  p2002OnCreate?: boolean;
+}) {
+  const ops: string[] = [];
+  const now = Date.now();
+  const store: any[] = [];
+  (opts.successAmounts ?? []).forEach((a, i) => store.push({
+    txn_id: `ok${i}`, booking_id: 'b1', txn_type: 'refund', txn_status: 'success',
+    amount: a, created_at: new Date(now - 3600000),
+  }));
+  (opts.pending ?? []).forEach((p, i) => store.push({
+    txn_id: `pend${i}`, booking_id: 'b1', txn_type: 'refund', txn_status: p.status ?? 'pending',
+    amount: p.amount, created_at: new Date(now - p.ageMs),
+  }));
+  const tx: any = {
+    ops,
+    async $queryRaw(..._a: any[]) {
+      ops.push('lock');
+      return [];
+    },
+    transaction: {
+      async findMany({ where }: any) {
+        ops.push(`read:${where.txn_status}`);
+        return store.filter((r) => r.txn_type === 'refund' && r.txn_status === where.txn_status)
+          .map((r) => ({ ...r }));
+      },
+      async create({ data }: any) {
+        ops.push('create');
+        if (opts.p2002OnCreate) {
+          throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+        }
+        const row = { ...data, txn_id: `new${store.length}`, created_at: new Date() };
+        store.push(row);
+        return { ...row };
+      },
+      async findFirst() {
+        ops.push('winner-read');
+        const hits = store.filter((r) => r.txn_type === 'refund' && (r.txn_status === 'pending' || r.txn_status === 'success'));
+        return hits.length ? { ...hits[hits.length - 1] } : null;
+      },
+      async findUnique() {
+        ops.push('findUnique');
+        return null;
+      },
+      async updateMany() {
+        ops.push('updateMany');
+        return { count: 0 };
+      },
+    },
+  };
+  return { tx, ops, store };
+}
+
+function claimCtx(overrides: any = {}) {
+  return {
+    req: { bookingId: 'b1' },
+    booking: { booking_id: 'b1', online_amount: 1000, convenience_fee: 40 },
+    capture: { razorpay_order_id: 'order_1' },
+    paymentId: 'pay_1',
+    mockPayment: true,
+    quote: { amount: 950, eligibility: 'FULL_REFUND' },
+    now: new Date(),
+    ...overrides,
+  };
+}
+
+describe('P2002 transaction boundary (UNIT, op-logging fake tx)', () => {
+  it('1. P2002 aborts with a marker and issues NO further SQL on the failed tx', async () => {
+    const { tx, ops } = makeRefundClaimTx({ p2002OnCreate: true });
+    await expect(claimRefundIntent(tx, claimCtx())).rejects.toMatchObject({ name: 'RefundIntentConflictError' });
+    const createIdx = ops.indexOf('create');
+    expect(createIdx).toBeGreaterThan(-1);
+    expect(ops.slice(createIdx + 1)).toEqual([]); // nothing after the violation
+  });
+
+  it('2. retry in a FRESH transaction converges (CASE A: pending winner -> IN_FLIGHT)', async () => {
+    // Attempt 1: tx poisoned by P2002 (another request owns the slot).
+    const t1 = makeRefundClaimTx({ p2002OnCreate: true });
+    await expect(claimRefundIntent(t1.tx, claimCtx())).rejects.toMatchObject({ name: 'RefundIntentConflictError' });
+    // Attempt 2: brand-new tx re-locks and re-reads; the winner is pending.
+    const t2 = makeRefundClaimTx({ pending: [{ ageMs: 60_000, amount: 500 }] });
+    const out: any = await claimRefundIntent(t2.tx, claimCtx());
+    expect(out).toMatchObject({ status: 'in_flight', duplicate: true });
+    expect(t2.store.filter((r: any) => r.txn_status === 'pending')).toHaveLength(1); // no second intent
+  });
+
+  it('CASE B: retry sees a now-successful winner -> truthful terminal, no new intent', async () => {
+    // First attempt poisoned by P2002; by the retry the winner has finalized
+    // to full success. The fresh transaction must report ALREADY_REFUNDED
+    // (ledger-proven) rather than creating or misreporting.
+    const t1 = makeRefundClaimTx({ p2002OnCreate: true });
+    await expect(claimRefundIntent(t1.tx, claimCtx())).rejects.toMatchObject({ name: 'RefundIntentConflictError' });
+    const t2 = makeRefundClaimTx({ successAmounts: [1000] });
+    await expect(claimRefundIntent(t2.tx, claimCtx())).rejects.toMatchObject({ code: 'ALREADY_REFUNDED' });
+    expect(t2.store.filter((r: any) => r.txn_status === 'pending')).toHaveLength(0);
+  });
+
+  it('CASE C: pending gone/failed -> fresh intent created in the new tx', async () => {
+    const t = makeRefundClaimTx({});
+    const out: any = await claimRefundIntent(t.tx, claimCtx());
+    expect(out.intent).toBeTruthy();
+    expect(out.amount).toBe(950);
+    expect(t.store.filter((r: any) => r.txn_status === 'pending')).toHaveLength(1);
+  });
+
+  it('CASE D: partial success leaves room -> creates intent, never ALREADY_REFUNDED', async () => {
+    const t = makeRefundClaimTx({ successAmounts: [400] });
+    const out: any = await claimRefundIntent(t.tx, claimCtx());
+    expect(out.intent).toBeTruthy();
+    expect(out.amount).toBe(600); // min(950 quote, 1000-400 remaining)
+  });
+
+  it('CASE E: full capture consumed -> ALREADY_REFUNDED is valid', async () => {
+    const t = makeRefundClaimTx({ successAmounts: [1000] });
+    await expect(claimRefundIntent(t.tx, claimCtx())).rejects.toMatchObject({ code: 'ALREADY_REFUNDED' });
+  });
+
+  it('P2002 catch block performs no tx queries (static)', () => {
+    const src = fs.readFileSync(new URL('../src/shared/services/refunds.ts', import.meta.url), 'utf8');
+    const at = src.indexOf("err?.code === 'P2002'");
+    expect(at).toBeGreaterThan(-1);
+    // Scope tightly to the catch body: nothing may run on the poisoned tx.
+    const block = src.slice(at, at + 350);
+    expect(block).not.toMatch(/await tx\./);
+    expect(block).not.toMatch(/convergeOnRefundWinner/);
+    expect(block).toContain('RefundIntentConflictError');
+  });
+
+  it('request flow retries P2002 in a fresh transaction (static)', () => {
+    const src = fs.readFileSync(new URL('../src/shared/services/refunds.ts', import.meta.url), 'utf8');
+    expect(src).toContain('MAX_CLAIM_ATTEMPTS');
+    expect(src).toContain('claimRefundIntent');
+  });
+});
+
+
+
