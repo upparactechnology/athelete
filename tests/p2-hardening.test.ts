@@ -107,7 +107,7 @@ function makeFakeDb() {
   const coupons = makeCollection('cpn');
   const users = makeCollection('usr');
   const partners = makeCollection('prt');
-  return {
+  const db: any = {
     refreshToken: rt,
     transaction: tx,
     couponRedemption: red,
@@ -124,7 +124,63 @@ function makeFakeDb() {
         return partners.findUnique({ where });
       },
     },
-  } as any;
+  };
+  // Snapshot/rollback transaction fake: gives the rollback/claim code paths
+  // genuine atomicity semantics in UNIT tests (real PG concurrency is NOT
+  // TESTED here). opts.failOn forces a throw inside the transaction.
+  db.$transaction = async (fn: any, opts: any) => {
+    const failOn = opts && opts.failOn ? String(opts.failOn) : undefined;
+    const snap = new Map<string, any[]>();
+    for (const c of [rt, tx, red, coupons]) {
+      snap.set(c, c.rows.map((r: any) => ({ ...r })));
+    }
+    const maybeFail = (name: string) => {
+      if (failOn === name) throw new Error(`injected-failure:${name}`);
+    };
+    const wrapCol = (c: any, name: string) => ({
+      ...c,
+      rows: c.rows,
+      async create(a: any) {
+        maybeFail(`${name}.create`);
+        return c.create(a);
+      },
+      async update(a: any) {
+        maybeFail(`${name}.update`);
+        return c.update(a);
+      },
+      async updateMany(a: any) {
+        maybeFail(`${name}.updateMany`);
+        return c.updateMany(a);
+      },
+      async findUnique(a: any) {
+        return c.findUnique(a);
+      },
+      async findFirst(a: any) {
+        return c.findFirst(a);
+      },
+      async findMany(a: any) {
+        return c.findMany(a);
+      },
+      async count(a: any) {
+        return c.count(a);
+      },
+      async $queryRaw(..._a: any[]) {
+        return [];
+      },
+    });
+    const txDb = { ...db, refreshToken: wrapCol(rt, 'refreshToken'), transaction: wrapCol(tx, 'transaction'), couponRedemption: wrapCol(red, 'couponRedemption'), coupon: wrapCol(coupons, 'coupon'), $transaction: db.$transaction };
+    txDb.$queryRaw = async (..._a: any[]) => [];
+    try {
+      return await fn(txDb);
+    } catch (e) {
+      for (const [c, rows] of snap) {
+        (c as any).rows.length = 0;
+        (c as any).rows.push(...rows);
+      }
+      throw e;
+    }
+  };
+  return db;
 }
 
 function seedUser(db: any, userId: string, status = 'Active') {
@@ -240,6 +296,15 @@ describe('P2-3 refund webhook transitions (UNIT, fake DB)', () => {
   function seedRefund(status: string, amount = 500) {
     const db = makeFakeDb();
     db.transaction.rows.push({
+      txn_id: 'cap1',
+      booking_id: 'b1',
+      razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'pay_1',
+      txn_type: 'capture',
+      txn_status: 'success',
+      amount: 1000,
+    });
+    db.transaction.rows.push({
       txn_id: 't1',
       booking_id: 'b1',
       razorpay_order_id: 'order_1',
@@ -253,38 +318,45 @@ describe('P2-3 refund webhook transitions (UNIT, fake DB)', () => {
 
   it('pending + processed -> success', async () => {
     const db = seedRefund('pending');
-    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', amountPaise: 50000 }, db);
+    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', paymentId: 'pay_1', amountPaise: 50000 }, db);
     expect(r).toMatchObject({ processed: true, reason: 'confirmed' });
-    expect(db.transaction.rows[0].txn_status).toBe('success');
+    expect(db.transaction.rows.find((t: any) => t.txn_id === 't1').txn_status).toBe('success');
   });
 
   it('duplicate processed is idempotent', async () => {
     const db = seedRefund('success');
-    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', amountPaise: 50000 }, db);
+    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', paymentId: 'pay_1', amountPaise: 50000 }, db);
     expect(r).toMatchObject({ processed: true, reason: 'duplicate' });
   });
 
   it('pending + failed -> failed; success never becomes failed', async () => {
     const db = seedRefund('pending');
-    expect(await applyRefundWebhookEvent({ type: 'refund.failed', refundId: 'rfnd_1' }, db)).toMatchObject({ reason: 'marked-failed' });
+    expect(await applyRefundWebhookEvent({ type: 'refund.failed', refundId: 'rfnd_1', paymentId: 'pay_1' }, db)).toMatchObject({ reason: 'marked-failed' });
     const db2 = seedRefund('success');
-    const r2 = await applyRefundWebhookEvent({ type: 'refund.failed', refundId: 'rfnd_1' }, db2);
+    const r2 = await applyRefundWebhookEvent({ type: 'refund.failed', refundId: 'rfnd_1', paymentId: 'pay_1' }, db2);
     expect(r2).toMatchObject({ processed: true, reason: 'duplicate' });
-    expect(db2.transaction.rows[0].txn_status).toBe('success');
+    expect(db2.transaction.rows.find((t: any) => t.txn_id === 't1').txn_status).toBe('success');
   });
 
   it('unknown refund id fabricates nothing; amount mismatch changes nothing', async () => {
     const db = seedRefund('pending');
-    expect(await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_nope' }, db)).toMatchObject({ processed: false });
-    expect(db.transaction.rows).toHaveLength(1);
-    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', amountPaise: 1 }, db);
+    expect(await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_nope', paymentId: 'pay_1' }, db)).toMatchObject({ processed: false });
+    expect(db.transaction.rows).toHaveLength(2);
+    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', paymentId: 'pay_1', amountPaise: 1 }, db);
     expect(r).toMatchObject({ processed: false, reason: 'amount-mismatch' });
-    expect(db.transaction.rows[0].txn_status).toBe('pending');
+    expect(db.transaction.rows.find((t: any) => t.txn_id === 't1').txn_status).toBe('pending');
+  });
+
+  it('missing payment binding is rejected without mutation', async () => {
+    const db = seedRefund('pending');
+    const r = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', amountPaise: 50000 }, db);
+    expect(r).toMatchObject({ processed: false, reason: 'payment-binding-missing' });
+    expect(db.transaction.rows.find((t: any) => t.txn_id === 't1').txn_status).toBe('pending');
   });
 
   it('failed refund is retryable (no success row blocks a fresh request)', async () => {
     const db = seedRefund('failed');
-    const success = db.transaction.rows.filter((r: any) => r.txn_status === 'success');
+    const success = db.transaction.rows.filter((r: any) => r.txn_type === 'refund' && r.txn_status === 'success');
     expect(success).toHaveLength(0);
   });
 });
@@ -749,5 +821,269 @@ describe('Refund webhook binding + terminal-state safety (UNIT, fake DB)', () =>
     expect(good).toMatchObject({ processed: true, reason: 'confirmed' });
     const dup = await applyRefundWebhookEvent({ type: 'refund.processed', refundId: 'rfnd_1', paymentId: 'pay_1', amountPaise: 50000 }, db);
     expect(dup).toMatchObject({ processed: true, reason: 'duplicate' });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* FINAL PASS: fail-closed creation states, atomic ledger + rollback.  */
+/* UNIT only (fakes + stubbed fetch). Live PG/gateway runs NOT TESTED. */
+/* ------------------------------------------------------------------ */
+
+import {
+  classifyRefundCreationResponse,
+  driveRefundIntent,
+} from '../src/shared/services/refunds.js';
+import { claimCouponUsage, recordCouponRedemption } from '../src/shared/services/coupons.js';
+
+describe('Refund creation states (UNIT)', () => {
+  it('processed response -> local SUCCESS', () => {
+    expect(classifyRefundCreationResponse({ ok: true, status: 200, body: { id: 'rfnd_1', status: 'processed' } }))
+      .toMatchObject({ outcome: 'success', refundId: 'rfnd_1' });
+  });
+
+  it('created/pending responses -> local PENDING with id stored', () => {
+    for (const status of ['created', 'pending']) {
+      expect(classifyRefundCreationResponse({ ok: true, status: 200, body: { id: 'rfnd_1', status } }))
+        .toMatchObject({ outcome: 'pending-confirmation', refundId: 'rfnd_1' });
+    }
+  });
+
+  it('explicit deterministic rejection (4xx + error) -> FAILED', () => {
+    expect(classifyRefundCreationResponse({
+      ok: false, status: 400, body: { error: { code: 'BAD_REQUEST_ERROR', description: 'nope' } },
+    })).toMatchObject({ outcome: 'rejected' });
+  });
+
+  it('2xx failed status -> FAILED (deterministic non-creation)', () => {
+    expect(classifyRefundCreationResponse({ ok: true, status: 200, body: { id: 'rfnd_1', status: 'failed' } }))
+      .toMatchObject({ outcome: 'rejected' });
+  });
+
+  it.each([
+    ['HTTP 500', { ok: false, status: 500, body: { error: { code: 'x' } } }],
+    ['HTTP 429', { ok: false, status: 429, body: { error: { code: 'x' } } }],
+    ['HTTP 400 without error shape', { ok: false, status: 400, body: { message: 'weird' } }],
+    ['malformed body', { ok: true, status: 200, body: null }],
+    ['missing id, no error', { ok: true, status: 200, body: { object: 'refund' } }],
+  ])('%s -> UNKNOWN (row stays pending)', (_label, res) => {
+    expect(classifyRefundCreationResponse(res as any).outcome).toBe('unknown');
+  });
+
+  it('transport timeout/network -> UNKNOWN', () => {
+    expect(classifyRefundCreationResponse({ ok: false, status: 0, body: undefined, transportError: 'timeout' }).outcome).toBe('unknown');
+    expect(classifyRefundCreationResponse({ ok: false, status: 0, body: undefined, transportError: 'network:boom' }).outcome).toBe('unknown');
+  });
+});
+
+describe('driveRefundIntent state handling (UNIT, fake DB + stub fetch)', () => {
+  // driveRefundIntent resolves keys from env first (no Redis/Admin needed).
+  process.env.RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'test-key-id';
+  process.env.RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'test-key-secret';
+  const intent = { txn_id: 'intent1' };
+  const booking = { booking_id: 'b1', user_id: 'u1' };
+  const quote = { eligibility: 'FULL_REFUND' };
+  const capture = { razorpay_order_id: 'order_1' };
+
+  function seedIntent(db: any) {
+    db.transaction.rows.push({
+      txn_id: 'intent1', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: null, txn_type: 'refund', txn_status: 'pending', amount: 500,
+    });
+  }
+  function row(db: any) {
+    return db.transaction.rows.find((t: any) => t.txn_id === 'intent1');
+  }
+  const notifier = async () => undefined;
+  const stubFetch = (res: any) => (async () => res) as any;
+
+  it('processed -> SUCCESS with id stored', async () => {
+    const db = makeFakeDb() as any;
+    seedIntent(db);
+    const out = await driveRefundIntent(intent, 500, 'pay_1', false, capture, booking, quote, {
+      fetchImpl: stubFetch({ ok: true, status: 200, json: async () => ({ id: 'rfnd_9', status: 'processed' }) }),
+      db, notifier: notifier as any, keys: { keyId: 'k', keySecret: 's' },
+    });
+    expect(out).toMatchObject({ status: 'succeeded' });
+    expect(row(db)).toMatchObject({ txn_status: 'success', razorpay_payment_id: 'rfnd_9' });
+  });
+
+  it.each(['created', 'pending'])('gateway %s -> row stays PENDING with id stored', async (status) => {
+    const db = makeFakeDb() as any;
+    seedIntent(db);
+    const out = await driveRefundIntent(intent, 500, 'pay_1', false, capture, booking, quote, {
+      fetchImpl: stubFetch({ ok: true, status: 200, json: async () => ({ id: 'rfnd_9', status }) }),
+      db, notifier: notifier as any, keys: { keyId: 'k', keySecret: 's' },
+    });
+    expect(out).toMatchObject({ status: 'initiated' });
+    expect(row(db)).toMatchObject({ txn_status: 'pending', razorpay_payment_id: 'rfnd_9' });
+  });
+
+  it('HTTP 500 / 429 / timeout / network / malformed all leave PENDING', async () => {
+    const cases: Array<[string, any]> = [
+      ['500', stubFetch({ ok: false, status: 500, json: async () => ({ error: { code: 'x' } }) })],
+      ['429', stubFetch({ ok: false, status: 429, json: async () => ({ error: { code: 'x' } }) })],
+      ['timeout', async () => { throw Object.assign(new Error('t'), { name: 'AbortError' }); }],
+      ['network', async () => { throw new Error('socket hang up'); }],
+      ['malformed', stubFetch({ ok: true, status: 200, json: async () => null })],
+    ];
+    for (const [label, fetchImpl] of cases) {
+      const db = makeFakeDb() as any;
+      seedIntent(db);
+      await expect(driveRefundIntent(intent, 500, 'pay_1', false, capture, booking, quote, {
+        fetchImpl: fetchImpl as any, db, notifier: notifier as any, keys: { keyId: 'k', keySecret: 's' },
+      })).rejects.toThrow();
+      expect(row(db).txn_status, label).toBe('pending');
+      expect(row(db).razorpay_payment_id, label).toBeNull();
+    }
+  });
+
+  it('explicit 400 rejection -> FAILED', async () => {
+    const db = makeFakeDb() as any;
+    seedIntent(db);
+    await expect(driveRefundIntent(intent, 500, 'pay_1', false, capture, booking, quote, {
+      fetchImpl: stubFetch({ ok: false, status: 400, json: async () => ({ error: { code: 'BAD_REQUEST_ERROR' } }) }),
+      db, notifier: notifier as any, keys: { keyId: 'k', keySecret: 's' },
+    })).rejects.toThrow(/rejected by gateway/);
+    expect(row(db).txn_status).toBe('failed');
+  });
+
+  it('retry/reconciliation eventually adopts a gateway-created refund', async () => {
+    const db = makeFakeDb() as any;
+    seedIntent(db);
+    // First attempt: gateway created (pending-confirmation).
+    await driveRefundIntent(intent, 500, 'pay_1', false, capture, booking, quote, {
+      fetchImpl: stubFetch({ ok: true, status: 200, json: async () => ({ id: 'rfnd_9', status: 'created' }) }),
+      db, notifier: notifier as any, keys: { keyId: 'k', keySecret: 's' },
+    });
+    expect(row(db)).toMatchObject({ txn_status: 'pending', razorpay_payment_id: 'rfnd_9' });
+    // Later webhook confirms the same refund id.
+    db.transaction.rows.push({
+      txn_id: 'cap1', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'pay_1', txn_type: 'capture', txn_status: 'success', amount: 1000,
+    });
+    const r = await applyRefundWebhookEvent(
+      { type: 'refund.processed', refundId: 'rfnd_9', paymentId: 'pay_1', amountPaise: 50000 }, db);
+    expect(r).toMatchObject({ processed: true, reason: 'confirmed' });
+    expect(row(db).txn_status).toBe('success');
+  });
+
+  it('resolveRazorpayKeys is bypassed in tests via env (no secret needed)', () => {
+    process.env.RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'test-key';
+    process.env.RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'test-secret';
+    expect(process.env.RAZORPAY_KEY_ID).toBeTruthy();
+  });
+});
+
+describe('Coupon ledger consistency (UNIT, snapshot-transaction fake)', () => {
+  function seedCoupon(db: any, opts: { usageLimit?: number; perUserLimit?: number; used?: number; discount?: string } = {}) {
+    db.coupon.rows.push({
+      coupon_id: 'c1', code: 'SAVE10', is_active: true,
+      valid_from: new Date(Date.now() - 1000), valid_until: new Date(Date.now() + 3600000),
+      discount_type: 'flat', discount_value: opts.discount ?? 100, max_discount: null,
+      min_order_value: 0, usage_limit: opts.usageLimit ?? 10, per_user_limit: opts.perUserLimit ?? 1,
+      used_count: opts.used ?? 0,
+    });
+  }
+
+  it('1/3. normal claim + redemption commit atomically', async () => {
+    const db = makeFakeDb() as any;
+    seedCoupon(db);
+    await db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'u1' });
+      await recordCouponRedemption(tx, { couponId: 'c1', userId: 'u1', bookingId: 'b1', discountAmount: 100 });
+    });
+    expect(db.coupon.rows[0].used_count).toBe(1);
+    expect(db.couponRedemption.rows).toHaveLength(1);
+    expect(db.couponRedemption.rows[0]).toMatchObject({ status: 'applied', discount_amount: 100 });
+  });
+
+  it('2. zero-discount claim still creates a redemption row', async () => {
+    const db = makeFakeDb() as any;
+    seedCoupon(db, { discount: 0 });
+    await db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'u1' });
+      await recordCouponRedemption(tx, { couponId: 'c1', userId: 'u1', bookingId: 'b1', discountAmount: 0 });
+    });
+    expect(db.couponRedemption.rows).toHaveLength(1);
+    expect(db.couponRedemption.rows[0].discount_amount).toBe(0);
+    expect(db.coupon.rows[0].used_count).toBe(1);
+  });
+
+  it('4. booking failure rolls back claim AND redemption together', async () => {
+    const db = makeFakeDb() as any;
+    seedCoupon(db);
+    await expect(db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'u1' });
+      await recordCouponRedemption(tx, { couponId: 'c1', userId: 'u1', bookingId: 'b1', discountAmount: 100 });
+      throw new Error('booking-create-failed');
+    }, { failOn: undefined })).rejects.toThrow('booking-create-failed');
+    expect(db.coupon.rows[0].used_count).toBe(0);
+    expect(db.couponRedemption.rows).toHaveLength(0);
+  });
+
+  it('5/6. serialized concurrent claims respect per-user and global limits', async () => {
+    const db = makeFakeDb() as any;
+    seedCoupon(db, { usageLimit: 2, perUserLimit: 1 });
+    // user A claims (holds the lock first, commits).
+    await db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'uA' });
+      await recordCouponRedemption(tx, { couponId: 'c1', userId: 'uA', bookingId: 'bA', discountAmount: 100 });
+    });
+    // user A again -> per-user limit (sees committed state thanks to the lock).
+    await expect(db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'uA' });
+    })).rejects.toMatchObject({ code: 'COUPON_USER_LIMIT' });
+    // user B claims the last global slot.
+    await db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'uB' });
+      await recordCouponRedemption(tx, { couponId: 'c1', userId: 'uB', bookingId: 'bB', discountAmount: 100 });
+    });
+    // user C -> global exhausted.
+    await expect(db.$transaction(async (tx: any) => {
+      await claimCouponUsage(tx, { couponId: 'c1', userId: 'uC' });
+    })).rejects.toMatchObject({ code: 'COUPON_EXHAUSTED' });
+    expect(db.coupon.rows[0].used_count).toBe(2);
+  });
+
+  it('7/8. concurrent cancellation decrements once; injected failure keeps pair consistent', async () => {
+    const db = makeFakeDb() as any;
+    db.coupon.rows.push({ coupon_id: 'c1', used_count: 5 });
+    db.couponRedemption.rows.push({ red_id: 'r1', coupon_id: 'c1', user_id: 'u', booking_id: 'b', status: 'applied' });
+    const [a, b] = await Promise.all([rollbackCouponForBooking('b', db), rollbackCouponForBooking('b', db)]);
+    expect(a.rolledBack || b.rolledBack).toBe(true);
+    expect(db.coupon.rows[0].used_count).toBe(4);
+    expect(db.couponRedemption.rows[0].status).toBe('rolled_back');
+    // Simulated crash inside the rollback transaction: nothing half-applied.
+    const db2 = makeFakeDb() as any;
+    db2.coupon.rows.push({ coupon_id: 'c1', used_count: 5 });
+    db2.couponRedemption.rows.push({ red_id: 'r1', coupon_id: 'c1', user_id: 'u', booking_id: 'b', status: 'applied' });
+    const origTx = db2.$transaction.bind(db2);
+    db2.$transaction = async (fn: any) => origTx(fn, { failOn: 'coupon.updateMany' });
+    await expect(rollbackCouponForBooking('b', db2)).rejects.toThrow('injected-failure');
+    expect(db2.couponRedemption.rows[0].status).toBe('applied');
+    expect(db2.coupon.rows[0].used_count).toBe(5);
+  });
+
+  it('9/10. repeated rollback is a no-op; used_count never negative', async () => {
+    const db = makeFakeDb() as any;
+    db.coupon.rows.push({ coupon_id: 'c1', used_count: 0 });
+    db.couponRedemption.rows.push({ red_id: 'r1', coupon_id: 'c1', user_id: 'u', booking_id: 'b', status: 'applied' });
+    expect(await rollbackCouponForBooking('b', db)).toMatchObject({ rolledBack: true });
+    expect(db.coupon.rows[0].used_count).toBe(0); // decremented then clamped
+    expect(await rollbackCouponForBooking('b', db)).toMatchObject({ rolledBack: false });
+    expect(db.coupon.rows[0].used_count).toBe(0);
+  });
+
+  it('duplicate redemption maps to conflict, not silent success', async () => {
+    const db = makeFakeDb() as any;
+    const tx: any = {
+      couponRedemption: {
+        async create() {
+          throw Object.assign(new Error('dup'), { code: 'P2002' });
+        },
+      },
+    };
+    await expect(recordCouponRedemption(tx, { couponId: 'c1', userId: 'u1', bookingId: 'b1', discountAmount: 10 }))
+      .rejects.toMatchObject({ code: 'COUPON_DUPLICATE' });
   });
 });

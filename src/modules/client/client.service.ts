@@ -39,7 +39,7 @@ import {
 } from '../../shared/utils/bookingLifecycle.js';
 import { notifyPartner, notifyUser } from '../../shared/services/notifications.js';
 import { requestBookingRefund } from '../../shared/services/refunds.js';
-import { claimCouponUsage, rollbackCouponForBooking } from '../../shared/services/coupons.js';
+import { claimCouponUsage, recordCouponRedemption, rollbackCouponForBooking } from '../../shared/services/coupons.js';
 import { createSession, refreshSession, revokeAllSessions, revokeSession } from '../../shared/utils/sessions.js';
 import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
 
@@ -787,23 +787,16 @@ export class ClientService {
             expires_at: expiresAt,
           }
         });
-        if (appliedCoupon && txDiscount > 0) {
-          try {
-            await tx.couponRedemption.create({
-              data: {
-                coupon_id: appliedCoupon.coupon_id,
-                user_id: userId,
-                booking_id: created.booking_id,
-                discount_amount: txDiscount,
-                status: 'applied',
-              },
-            });
-          } catch (err: any) {
-            if (err?.code === 'P2002') {
-              throw new ConflictError("Coupon already applied to this booking", "COUPON_DUPLICATE");
-            }
-            throw err;
-          }
+        if (appliedCoupon) {
+          // Every successful claim writes exactly one redemption ledger row,
+          // even for zero-discount coupons (per-user limits + rollback need
+          // the row). Same transaction: booking failure rolls all of it back.
+          await recordCouponRedemption(tx, {
+            couponId: appliedCoupon.coupon_id,
+            userId,
+            bookingId: created.booking_id,
+            discountAmount: txDiscount,
+          });
         }
         return created;
       });

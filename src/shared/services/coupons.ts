@@ -53,13 +53,50 @@ export async function claimCouponUsage(tx: any, input: CouponClaimInput): Promis
   return { coupon };
 }
 
+export interface CouponRedemptionInput {
+  couponId: string;
+  userId: string;
+  bookingId: string;
+  discountAmount: number;
+}
+
+/**
+ * Ledger writer (call INSIDE the booking transaction, after a successful
+ * claim). EVERY successful claim gets exactly one redemption row — even
+ * when discountAmount is 0 — so per-user limits and rollback accounting
+ * always have a row to check. P2002 maps to a duplicate-use conflict.
+ */
+export async function recordCouponRedemption(tx: any, input: CouponRedemptionInput): Promise<{ redId: string }> {
+  try {
+    const row = await tx.couponRedemption.create({
+      data: {
+        coupon_id: input.couponId,
+        user_id: input.userId,
+        booking_id: input.bookingId,
+        discount_amount: input.discountAmount,
+        status: 'applied',
+      },
+    });
+    return { redId: row.red_id };
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      throw new ConflictError('Coupon already applied to this booking', 'COUPON_DUPLICATE');
+    }
+    throw err;
+  }
+}
+
 /**
  * P2-4/P2-7 coupon rollback: APPLIED -> ROLLED_BACK exactly once per
  * redemption, with exactly one used_count decrement.
  *
- * Two concurrent cancellations share one outcome via a conditional flip:
- * only the request whose updateMany matches (red_id + status applied)
- * performs the decrement. Repeat calls are safe no-ops.
+ * Atomicity: each redemption's flip + its coupon decrement + the
+ * non-negative clamp commit in ONE database transaction. A crash between
+ * the flip and the decrement rolls everything back, so the pair can never
+ * diverge. Two concurrent cancellations share one outcome via the
+ * conditional flip (only count === 1 proceeds). Repeat calls are no-ops.
+ *
+ * db must support $transaction (Prisma or a compatible fake in tests).
  */
 export async function rollbackCouponForBooking(bookingId: string, db: any = prisma): Promise<{ rolledBack: boolean }> {
   if (!bookingId) return { rolledBack: false };
@@ -69,21 +106,28 @@ export async function rollbackCouponForBooking(bookingId: string, db: any = pris
   });
   let rolledBack = false;
   for (const row of applied) {
-    const flipped = await db.couponRedemption.updateMany({
-      where: { red_id: row.red_id, status: 'applied' },
-      data: { status: 'rolled_back' },
+    const flipped = await db.$transaction(async (tx: any) => {
+      // BEGIN: lock the coupon row so concurrent rollbacks of the same
+      // redemption serialize instead of interleaving flip/decrement.
+      await tx.$queryRaw`SELECT coupon_id FROM coupons WHERE coupon_id = ${row.coupon_id} FOR UPDATE`;
+      const claimed = await tx.couponRedemption.updateMany({
+        where: { red_id: row.red_id, status: 'applied' },
+        data: { status: 'rolled_back' },
+      });
+      if (claimed.count === 0) return false; // another cancellation won
+      await tx.coupon.updateMany({
+        where: { coupon_id: row.coupon_id },
+        data: { used_count: { decrement: 1 } },
+      });
+      // Clamp drift inside the same transaction: never negative.
+      await tx.coupon.updateMany({
+        where: { coupon_id: row.coupon_id, used_count: { lt: 0 } },
+        data: { used_count: 0 },
+      });
+      return true;
+      // COMMIT (or full rollback on any throw, including injected failures).
     });
-    if (flipped.count === 0) continue; // another cancellation won this row
-    rolledBack = true;
-    await db.coupon.updateMany({
-      where: { coupon_id: row.coupon_id },
-      data: { used_count: { decrement: 1 } },
-    });
-    // Clamp drift: usage can never go negative.
-    await db.coupon.updateMany({
-      where: { coupon_id: row.coupon_id, used_count: { lt: 0 } },
-      data: { used_count: 0 },
-    });
+    if (flipped) rolledBack = true;
   }
   return { rolledBack };
 }
