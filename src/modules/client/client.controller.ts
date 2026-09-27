@@ -3,9 +3,10 @@ import { ClientService } from './client.service.js';
 import { AuthRequest } from '../../shared/types/index.js';
 import { prisma } from '../../config/prisma.js';
 import { AdminService } from '../admin/admin.service.js';
-import { ForbiddenError } from '../../shared/utils/errors.js';
+import { ConflictError, ForbiddenError, ValidationError } from '../../shared/utils/errors.js';
 import { resolvePrivateFile, validateUploadedFileContent } from '../../middleware/upload.js';
 import { SAFE_USER_PUBLIC_SELECT } from '../../shared/utils/bookingPrivacy.js';
+import { ensureReviewEligible } from '../../shared/utils/bookingLifecycle.js';
 
 function requirePartner(req: AuthRequest): string {
   if (!req.user || req.user.role !== 'partner') {
@@ -228,6 +229,40 @@ export class ClientController {
     }
   }
 
+  // P2-7: session rotation (public; rate-limited at the route).
+  public static async refreshAccessToken(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { refreshToken } = req.body;
+      const data = await ClientService.refreshAccessToken(refreshToken);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // P2-7: logout (revokes the presented refresh session; idempotent).
+  public static async logout(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { refreshToken } = req.body;
+      const data = await ClientService.logout(refreshToken);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // P2-3: user-initiated refund for own booking (server-computed amount).
+  public static async requestRefund(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.id;
+      const { bookingId } = req.body;
+      const data = await ClientService.requestRefund(userId!, bookingId);
+      res.status(200).json({ success: true, data: { ...data, refundTxn: undefined, refundId: (data.refundTxn as any)?.txn_id } });
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // 7. Coupons Handlers
   public static async getCoupons(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -255,6 +290,18 @@ export class ClientController {
       const { teamName } = req.body;
       const data = await ClientService.registerTournament(userId!, tournamentId, teamName);
       res.status(201).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // P2-5: cancel own tournament registration (frees capacity exactly once).
+  public static async cancelTournamentRegistration(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.id;
+      const { tournamentId } = req.params;
+      const data = await ClientService.cancelTournamentRegistration(userId!, tournamentId);
+      res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
     }
@@ -472,60 +519,59 @@ export class ClientController {
   public static async createVenueReview(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.id;
+      const role = req.user?.role || 'user';
       const { venueId } = req.params;
       const { rating, comment, bookingId } = req.body;
-      
-      let finalBookingId = bookingId;
-      if (!finalBookingId) {
-        const booking = await prisma.booking.findFirst({
+
+      // P2-6: only players may review, only from their own CONFIRMED/COMPLETED
+      // booking for this venue, one review per booking. No fabricated bookings.
+      if (role !== 'user') {
+        throw new ForbiddenError("Only players may submit venue reviews");
+      }
+      const ratingNum = parseInt(String(rating), 10);
+      if (!Number.isFinite(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+        throw new ValidationError("Rating must be between 1 and 5");
+      }
+      if (!comment || !String(comment).trim()) {
+        throw new ValidationError("Review comment is required");
+      }
+
+      let booking: any = null;
+      if (bookingId) {
+        booking = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
+        ensureReviewEligible(booking, userId!, venueId, role);
+      } else {
+        booking = await prisma.booking.findFirst({
           where: {
             user_id: userId,
             venue_id: venueId,
+            status: { in: ['CONFIRMED', 'COMPLETED'] },
           },
           orderBy: { created_at: 'desc' }
         });
-        if (booking) {
-          finalBookingId = booking.booking_id;
-        }
+        ensureReviewEligible(booking, userId!, venueId, role);
       }
 
-      if (!finalBookingId) {
-        const dummySlot = await prisma.slot.findFirst({ where: { venue_id: venueId } });
-        if (dummySlot) {
-          const newBooking = await prisma.booking.create({
-            data: {
-              user_id: userId!,
-              venue_id: venueId,
-              slot_id: dummySlot.slot_id,
-              status: 'CONFIRMED',
-              payment_mode: 'free',
-              eticket_code: `APV-${Date.now()}-${Math.floor(Math.random()*1000)}`,
-              convenience_fee: 0,
-              commission_amount: 0,
-              gst_amount: 0,
-              partner_amount: 0,
-              online_amount: 0,
-              venue_amount: 0,
-            }
-          });
-          finalBookingId = newBooking.booking_id;
-        } else {
-          throw new Error("Cannot review this venue: no slots available");
+      let review;
+      try {
+        review = await prisma.venueReview.create({
+          data: {
+            venue_id: venueId,
+            user_id: userId!,
+            booking_id: booking.booking_id,
+            rating: ratingNum,
+            comment: String(comment).trim()
+          },
+          include: {
+            user: { select: SAFE_USER_PUBLIC_SELECT }
+          }
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          throw new ConflictError("You have already reviewed this booking", "DUPLICATE_REVIEW");
         }
+        throw err;
       }
-
-      const review = await prisma.venueReview.create({
-        data: {
-          venue_id: venueId,
-          user_id: userId!,
-          booking_id: finalBookingId,
-          rating: parseInt(rating.toString()),
-          comment
-        },
-        include: {
-          user: { select: SAFE_USER_PUBLIC_SELECT }
-        }
-      });
 
       const allReviews = await prisma.venueReview.findMany({
         where: { venue_id: venueId }

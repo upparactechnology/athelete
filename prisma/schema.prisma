@@ -129,6 +129,8 @@ model Booking {
   online_amount     Decimal       @db.Decimal(10, 2)
   venue_amount      Decimal       @db.Decimal(10, 2)
   created_at        DateTime      @default(now()) @db.Timestamptz
+  // P2-1: server-side payment deadline for PENDING bookings. NULL once settled.
+  expires_at        DateTime?     @db.Timestamptz
 
   user              User          @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
   venue             Venue         @relation(fields: [venue_id], references: [venue_id], onDelete: Cascade)
@@ -137,6 +139,7 @@ model Booking {
   disputes          Dispute[]
   reviews           VenueReview[]
 
+  @@index([status, expires_at])
   @@map("bookings")
 }
 
@@ -189,11 +192,16 @@ model RefreshToken {
   user_id           String    @db.Uuid
   role              String    // user | partner | admin
   token_hash        String
+  // P2-7: rotation chain. jti identifies this token, family_id links the
+  // login session; reuse of a rotated (revoked) token revokes the family.
+  jti               String?   @unique
+  family_id         String?
   device_info       String?
   fcm_token         String?
   revoked_at        DateTime? @db.Timestamptz
   expires_at        DateTime  @db.Timestamptz
 
+  @@index([user_id])
   @@map("refresh_tokens")
 }
 
@@ -227,10 +235,12 @@ model VenueReview {
   comment           String
   reply             String?
 
-  venue             Venue   @relation(fields: [venue_id], references: [venue_id], onDelete: Cascade)
-  user              User    @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
-  booking           Booking @relation(fields: [booking_id], references: [booking_id], onDelete: Cascade)
+  venue             Venue     @relation(fields: [venue_id], references: [venue_id], onDelete: Cascade)
+  user              User      @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  booking           Booking   @relation(fields: [booking_id], references: [booking_id], onDelete: Cascade)
 
+  // P2-6: one review per booking (DB-enforced duplicate prevention).
+  @@unique([booking_id])
   @@map("venue_reviews")
 }
 
@@ -254,6 +264,8 @@ model Tournament {
   registration_fee  Decimal  @db.Decimal(10, 2)
   status            String   @default("upcoming") // upcoming | open | full | completed | cancelled
   max_participants  Int
+  // P2-5: atomically guarded participant counter (never negative).
+  current_participants Int    @default(0)
 
   venue             Venue    @relation(fields: [venue_id], references: [venue_id], onDelete: Cascade)
   registrations     TournamentRegistration[]
@@ -271,6 +283,8 @@ model TournamentRegistration {
   tournament        Tournament @relation(fields: [tournament_id], references: [tournament_id], onDelete: Cascade)
   user              User       @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
 
+  // P2-5: one registration per user per tournament (DB-enforced).
+  @@unique([tournament_id, user_id])
   @@map("tournament_registrations")
 }
 
@@ -310,10 +324,30 @@ model Coupon {
   is_active         Boolean         @default(true)
   valid_from        DateTime        @db.Timestamptz
   valid_until       DateTime        @db.Timestamptz
+  // P2-4: atomically guarded global consumption counter (never negative/over).
+  used_count        Int             @default(0)
 
   milestones        UserMilestone[]
+  redemptions       CouponRedemption[]
 
   @@map("coupons")
+}
+
+// P2-4: auditable per-use coupon ledger; backs per-user limits + rollback.
+model CouponRedemption {
+  red_id            String   @id @default(uuid()) @db.Uuid
+  coupon_id         String   @db.Uuid
+  user_id           String   @db.Uuid
+  booking_id        String   @db.Uuid
+  discount_amount   Decimal  @db.Decimal(10, 2)
+  status            String   @default("applied") // applied | rolled_back
+  used_at           DateTime @default(now()) @db.Timestamptz
+
+  coupon            Coupon   @relation(fields: [coupon_id], references: [coupon_id], onDelete: Cascade)
+
+  @@unique([coupon_id, user_id, booking_id])
+  @@index([coupon_id, user_id])
+  @@map("coupon_redemptions")
 }
 
 model PartnerDocument {

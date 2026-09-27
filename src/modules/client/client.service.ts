@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { prisma } from '../../config/prisma.js';
 import { env } from '../../config/env.js';
 import { redis } from '../../config/redis.js';
@@ -29,11 +29,26 @@ import {
   toPublicUser,
   toSelfUser,
 } from '../../shared/utils/bookingPrivacy.js';
+import {
+  BOOKING_STATUS,
+  assertBookingTransition,
+  canRegisterTournament,
+  computeCouponDiscount,
+  computeRefundQuote,
+  ensureReviewEligible,
+} from '../../shared/utils/bookingLifecycle.js';
+import { notifyPartner, notifyUser } from '../../shared/services/notifications.js';
+import { requestBookingRefund } from '../../shared/services/refunds.js';
+import { createSession, refreshSession, revokeAllSessions, revokeSession } from '../../shared/utils/sessions.js';
 import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
 
 const OTP_RESEND_COOLDOWN_KEY = (phone: string) => `otp:cooldown:${phone}`;
 const BOOKING_PAYMENT_GUARD_KEY = (paymentId: string) => `processed_booking_payment:${paymentId}`;
 const WEBHOOK_EVENT_GUARD_KEY = (eventId: string) => `processed_webhook_event:${eventId}`;
+
+/** Internal markers for the verify-payment confirm race (never cross API). */
+class ConfirmRaceError extends Error {}
+class ConfirmExpiredError extends Error {}
 
 /** Razorpay credentials: explicit env first, Redis system_settings fallback. */
 async function resolveRazorpayKeys(): Promise<{ keyId: string; keySecret: string }> {
@@ -299,18 +314,7 @@ export class ClientService {
       }
     }
 
-    const payload = { sub: id, role, status: "Active" };
-    const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: '1d' });
-    const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
-
-    await prisma.refreshToken.create({
-      data: {
-        user_id: id,
-        role,
-        token_hash: await bcrypt.hash(refreshToken, 10),
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
+    const { accessToken, refreshToken } = await createSession(id, role);
 
     return { accessToken, refreshToken };
   }
@@ -398,19 +402,7 @@ export class ClientService {
       name = user.name || "Athlete User";
     }
 
-    const payload = { sub: id, role: safeRole, status: "Active" };
-    const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: '1d' });
-    const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
-
-    // Store refresh token
-    await prisma.refreshToken.create({
-      data: {
-        user_id: id,
-        role: safeRole,
-        token_hash: await bcrypt.hash(refreshToken, 10),
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
+    const { accessToken, refreshToken } = await createSession(id, safeRole);
 
     return {
       accessToken,
@@ -422,6 +414,21 @@ export class ClientService {
         role: safeRole
       }
     };
+  }
+
+  /** P2-7: rotate a refresh token into a fresh pair (replay-safe). */
+  public static async refreshAccessToken(refreshToken: string) {
+    return refreshSession(refreshToken);
+  }
+
+  /** P2-7: revoke the presented refresh session (idempotent logout). */
+  public static async logout(refreshToken: string) {
+    return revokeSession(refreshToken);
+  }
+
+  /** P2-3: user-initiated refund for own booking (server-computed amount). */
+  public static async requestRefund(userId: string, bookingId: string) {
+    return requestBookingRefund({ bookingId, userId });
   }
 
   // 2. User/Partner Profiles
@@ -495,14 +502,58 @@ export class ClientService {
   }
 
   public static async deleteProfile(id: string, role: string) {
+    // P2-8: anonymize, never hard-delete. Financial/audit history
+    // (bookings, transactions, disputes, reviews, settlements) stays intact
+    // while credentials, sessions, tokens, and PII are removed/disabled.
     if (role === 'partner') {
-      return prisma.partner.delete({
-        where: { partner_id: id }
+      await prisma.venue.updateMany({ where: { partner_id: id }, data: { status: 'unlisted' } });
+      await revokeAllSessions(id);
+      await prisma.partner.update({
+        where: { partner_id: id },
+        data: {
+          phone_number: `deleted-partner-${id}`,
+          email: `deleted-partner-${id}@athletepov.com`,
+          avatar_url: null,
+          fcm_token: null,
+          password_hash: null,
+          kyc_status: 'deleted',
+          gst_number: null,
+          pan_number: null,
+          aadhaar_number: null,
+          bank_name: null,
+          bank_account_no: null,
+          bank_ifsc: null,
+          temp_bank_name: null,
+          temp_bank_account_no: null,
+          temp_bank_ifsc: null,
+        }
       });
+      return { deleted: true, anonymized: true };
     } else {
-      return prisma.user.delete({
-        where: { user_id: id }
+      const user = await prisma.user.findUnique({ where: { user_id: id } });
+      await revokeAllSessions(id);
+      if (user) {
+        await prisma.otpLog.deleteMany({ where: { phone_number: user.phone_number } }).catch(() => undefined);
+        if (user.email) {
+          await prisma.otpLog.deleteMany({ where: { phone_number: user.email } }).catch(() => undefined);
+        }
+      }
+      await prisma.oAuthIdentity.deleteMany({ where: { user_id: id } }).catch(() => undefined);
+      await prisma.user.update({
+        where: { user_id: id },
+        data: {
+          phone_number: `deleted-user-${id}`,
+          email: null,
+          name: 'Deleted Athlete',
+          password_hash: null,
+          fcm_token: null,
+          avatar_url: null,
+          city: null,
+          state: null,
+          status: 'Deleted',
+        }
       });
+      return { deleted: true, anonymized: true };
     }
   }
 
@@ -656,18 +707,24 @@ export class ClientService {
       }
 
     let discount = 0.0;
+    let appliedCoupon: any = null;
+    const now = new Date();
     if (couponCode) {
+      // P2-4: full server-side validation (active, window, min order).
+      // Usage is claimed atomically with booking creation below.
       const coupon = await prisma.coupon.findUnique({ where: { code: couponCode } });
-      if (coupon && coupon.is_active && new Date(coupon.valid_until) >= new Date()) {
-        if (coupon.discount_type === 'percent') {
-          discount = (Number(slot.price) * Number(coupon.discount_value)) / 100;
-          if (coupon.max_discount) {
-            discount = Math.min(discount, Number(coupon.max_discount));
-          }
-        } else {
-          discount = Number(coupon.discount_value);
-        }
+      if (!coupon || !coupon.is_active) throw new ValidationError("Coupon is not active");
+      if (new Date(coupon.valid_from) > now || new Date(coupon.valid_until) < now) {
+        throw new ValidationError("Coupon is expired or not yet valid");
       }
+      if (Number(coupon.min_order_value || 0) > Number(slot.price)) {
+        throw new ValidationError("Coupon minimum order value not met");
+      }
+      appliedCoupon = coupon;
+      discount = computeCouponDiscount(
+        { discount_type: coupon.discount_type, discount_value: Number(coupon.discount_value), max_discount: coupon.max_discount != null ? Number(coupon.max_discount) : null },
+        Number(slot.price)
+      );
     }
 
     const price = Number(slot.price);
@@ -691,28 +748,81 @@ export class ClientService {
     }
 
     const eticketCode = `APV-${Date.now().toString(36).toUpperCase()}-${randomInt(100000, 1000000)}`;
+    const bookingStatus = paymentMode === 'free' ? BOOKING_STATUS.CONFIRMED : BOOKING_STATUS.PENDING;
+    // P2-1: server-side payment deadline for unpaid bookings.
+    const expiresAt = bookingStatus === BOOKING_STATUS.PENDING
+      ? new Date(now.getTime() + env.BOOKING_EXPIRY_MINUTES * 60 * 1000)
+      : null;
 
     let booking;
     try {
-      booking = await prisma.booking.create({
-        data: {
-          user_id: userId,
-          venue_id: venueId,
-          slot_id: slotId,
-          status: paymentMode === 'free' ? 'CONFIRMED' : 'PENDING',
-          payment_mode: paymentMode,
-          eticket_code: eticketCode,
-          convenience_fee: convenienceFee,
-          commission_amount: commissionAmount,
-          gst_amount: gstAmount,
-          partner_amount: partnerAmount,
-          online_amount: onlineAmount,
-          venue_amount: venueAmount
+      // P2-4: booking + coupon claim commit atomically. The conditional
+      // increment is the exact global-usage guard; the redemption row plus
+      // unique constraint blocks duplicate use for the same booking.
+      booking = await prisma.$transaction(async (tx) => {
+        if (appliedCoupon) {
+          const claimed = await tx.coupon.updateMany({
+            where: {
+              coupon_id: appliedCoupon.coupon_id,
+              is_active: true,
+              valid_from: { lte: now },
+              valid_until: { gte: now },
+              used_count: { lt: appliedCoupon.usage_limit },
+            },
+            data: { used_count: { increment: 1 } },
+          });
+          if (claimed.count === 0) {
+            throw new ConflictError("Coupon usage limit reached", "COUPON_EXHAUSTED");
+          }
+          const priorUses = await tx.couponRedemption.count({
+            where: { coupon_id: appliedCoupon.coupon_id, user_id: userId, status: 'applied' },
+          });
+          if (priorUses >= (appliedCoupon.per_user_limit ?? 1)) {
+            throw new ConflictError("Coupon per-user limit reached", "COUPON_USER_LIMIT");
+          }
         }
+        const created = await tx.booking.create({
+          data: {
+            booking_id: randomUUID(),
+            user_id: userId,
+            venue_id: venueId,
+            slot_id: slotId,
+            status: bookingStatus,
+            payment_mode: paymentMode,
+            eticket_code: eticketCode,
+            convenience_fee: convenienceFee,
+            commission_amount: commissionAmount,
+            gst_amount: gstAmount,
+            partner_amount: partnerAmount,
+            online_amount: onlineAmount,
+            venue_amount: venueAmount,
+            expires_at: expiresAt,
+          }
+        });
+        if (appliedCoupon && discount > 0) {
+          try {
+            await tx.couponRedemption.create({
+              data: {
+                coupon_id: appliedCoupon.coupon_id,
+                user_id: userId,
+                booking_id: created.booking_id,
+                discount_amount: discount,
+                status: 'applied',
+              },
+            });
+          } catch (err: any) {
+            if (err?.code === 'P2002') {
+              throw new ConflictError("Coupon already applied to this booking", "COUPON_DUPLICATE");
+            }
+            throw err;
+          }
+        }
+        return created;
       });
     } catch (err) {
       // Booking row failed: release the reservation so the slot is not
       // permanently blocked by a failed/abandoned request.
+      // (Coupon increments roll back with the transaction automatically.)
       await prisma.slot.updateMany({
         where: { slot_id: slotId, status: 'booked' },
         data: { status: 'available' }
@@ -750,6 +860,13 @@ export class ClientService {
     const booking = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
     if (!booking) throw new NotFoundError("Booking not found");
     if (booking.user_id !== userId) throw new ForbiddenError("You do not own this booking");
+    // P2-1/P2-2: no payment orders for terminal bookings.
+    if (booking.status === BOOKING_STATUS.EXPIRED) {
+      throw new ConflictError("Booking session expired. Please create a new booking.", "BOOKING_EXPIRED");
+    }
+    if (booking.status !== BOOKING_STATUS.PENDING && booking.status !== BOOKING_STATUS.CONFIRMED) {
+      throw new ConflictError(`Payments not allowed for booking status ${booking.status}`, "ILLEGAL_STATUS_TRANSITION");
+    }
     if (booking.status === 'CONFIRMED') {
       const confirmed = await prisma.transaction.findFirst({
         where: { booking_id: bookingId, txn_status: 'success' },
@@ -924,19 +1041,33 @@ export class ClientService {
       }
 
       const result = await prisma.$transaction(async (tx) => {
+        // P2-1/P2-2: confirm ONLY a live PENDING booking. Expired (or
+        // concurrently settled) bookings never confirm through this path.
+        const now = new Date();
+        const confirmed = await tx.booking.updateMany({
+          where: {
+            booking_id: bookingId,
+            status: BOOKING_STATUS.PENDING,
+            OR: [{ expires_at: null }, { expires_at: { gt: now } }],
+          },
+          data: { status: BOOKING_STATUS.CONFIRMED, expires_at: null },
+        });
+        if (confirmed.count === 0) {
+          throw new ConfirmRaceError();
+        }
         await tx.transaction.update({
           where: { txn_id: txn.txn_id },
           data: { razorpay_payment_id: razorpayPaymentId, txn_status: "success" }
         });
-        const booking = await tx.booking.update({
+        const booking = await tx.booking.findUnique({
           where: { booking_id: bookingId },
-          data: { status: "CONFIRMED" },
           include: {
             user: true,
             venue: { include: { partner: true } },
             slot: true
           }
         });
+        if (!booking) throw new NotFoundError("Booking not found");
         const updatedUser = await tx.user.update({
           where: { user_id: booking.user_id },
           data: {
@@ -945,32 +1076,69 @@ export class ClientService {
           }
         });
         return { booking, updatedUser };
+      }).catch(async (err) => {
+        if (!(err instanceof ConfirmRaceError)) throw err;
+        // Another writer won (confirm/cancel/expire raced verification).
+        const current = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
+        if (current?.status === BOOKING_STATUS.CONFIRMED) {
+          const full = await prisma.booking.findUnique({
+            where: { booking_id: bookingId },
+            include: { user: true, venue: { include: { partner: true } }, slot: true },
+          });
+          return { booking: full, updatedUser: null, idempotent: true } as any;
+        }
+        // P2-1: payment is real (HMAC + gateway verified above) but the
+        // booking is no longer confirmable (EXPIRED or past-deadline PENDING).
+        // Record the payment truthfully; NEVER confirm. The caller receives
+        // BOOKING_EXPIRED and may pursue a refund via the refund endpoint.
+        if (current && current.status === BOOKING_STATUS.PENDING && current.expires_at && current.expires_at <= new Date()) {
+          await prisma.booking.updateMany({
+            where: { booking_id: bookingId, status: BOOKING_STATUS.PENDING },
+            data: { status: BOOKING_STATUS.EXPIRED, expires_at: null },
+          });
+          await prisma.slot.updateMany({
+            where: { slot_id: current.slot_id, status: 'booked' },
+            data: { status: 'available' },
+          });
+        }
+        await prisma.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: razorpayPaymentId, txn_status: 'success' },
+        });
+        throw new ConfirmExpiredError();
       });
 
-      // Process Rewards & Milestones (non-fatal).
-      try {
-        await ClientService.processRewardsAndMilestones(result.updatedUser, result.booking);
-      } catch (err) {
-        console.error("Error processing rewards/milestones:", err);
+      // Process Rewards & Milestones (non-fatal; skipped on idempotent replay).
+      if (!result.idempotent) {
+        try {
+          await ClientService.processRewardsAndMilestones(result.updatedUser, result.booking);
+        } catch (err) {
+          console.error("Error processing rewards/milestones:", err);
+        }
       }
 
       const { booking } = result;
-      // Send FCM Notifications
-      if (booking.user.fcm_token) {
-        const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
-        sendPushNotification(
-          booking.user.fcm_token,
-          "Booking Confirmed!",
-          `Your booking at ${booking.venue.name} for slot ${slotTime} is confirmed.`
-        ).catch(e => console.error("FCM error notifying user of confirmed booking:", e));
+      if (result.idempotent) {
+        return { ...sanitizeBookingForResponse(booking), alreadyProcessed: true };
       }
-      if (booking.venue.partner.fcm_token) {
+      // P2-9: persisted + deduped notifications (invalid tokens cleaned).
+      {
         const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
-        sendPushNotification(
-          booking.venue.partner.fcm_token,
-          "New Booking Received!",
-          `${booking.user.name || 'An athlete'} has booked slot ${slotTime} at ${booking.venue.name}.`
-        ).catch(e => console.error("FCM error notifying partner of new booking:", e));
+        await notifyUser(
+          booking.user_id, 'booking',
+          "Booking Confirmed!",
+          `Your booking at ${booking.venue.name} for slot ${slotTime} is confirmed.`,
+          `booking-confirmed:${bookingId}`
+        ).catch(() => undefined);
+        const confirmPartnerId = (booking.venue as any)?.partner?.partner_id ?? (booking.venue as any)?.partner_id;
+        if (confirmPartnerId && (booking.venue as any)?.partner?.fcm_token) {
+          await notifyPartner(
+            confirmPartnerId, 'booking',
+            "New Booking Received!",
+            `${booking.user.name || 'An athlete'} has booked slot ${slotTime} at ${booking.venue.name}.`,
+            `booking-received:${bookingId}`
+          ).catch(() => undefined);
+        }
       }
 
       // B1: global broadcast carries ONLY the minimal scalar event. The
@@ -995,6 +1163,9 @@ export class ClientService {
       // never reach here (returned above).
       if (err instanceof ValidationError) {
         await redis.del(BOOKING_PAYMENT_GUARD_KEY(razorpayPaymentId));
+      }
+      if (err instanceof ConfirmExpiredError) {
+        throw new ConflictError("Booking session expired before payment confirmation. Please rebook; a refund can be requested for the captured payment.", "BOOKING_EXPIRED");
       }
       throw err;
     }
@@ -1021,6 +1192,26 @@ export class ClientService {
     }
     const eventId: string | undefined = event?.id;
     const type: string | undefined = event?.event;
+    // P2-3: refund events carry a refund entity (not a payment entity).
+    if (type === 'refund.processed' || type === 'refund.failed') {
+      const refund = (event as any)?.payload?.refund?.entity;
+      if (!refund?.id) {
+        return { ignored: true, reason: 'unsupported-event' };
+      }
+      const refundGuardKey = eventId ? WEBHOOK_EVENT_GUARD_KEY(eventId) : BOOKING_PAYMENT_GUARD_KEY(refund.id);
+      const refundFirst = await redis.set(refundGuardKey, type, { NX: true, EX: 86400 * 30 });
+      if (refundFirst === null) {
+        return { duplicate: true, event: type };
+      }
+      const { applyRefundWebhookEvent } = await import('../../shared/services/refunds.js');
+      const outcome = await applyRefundWebhookEvent({
+        type,
+        refundId: refund.id,
+        paymentId: refund.payment_id,
+        amountPaise: refund.amount != null ? Number(refund.amount) : undefined,
+      });
+      return { processed: outcome.processed, event: type, reason: outcome.reason };
+    }
     const payment = event?.payload?.payment?.entity;
     const orderId: string | undefined = payment?.order_id;
     const paymentId: string | undefined = payment?.id;
@@ -1084,10 +1275,28 @@ export class ClientService {
 
       // action === 'confirm': atomic PENDING -> CONFIRMED. The conditional
       // update is the correctness guarantee under concurrent webhooks.
+      // P2-1: a PENDING row past its server-side deadline must expire instead
+      // of confirming, even if the sweeper has not run yet.
+      if (bookingRow.expires_at && bookingRow.expires_at <= new Date()) {
+        await prisma.booking.updateMany({
+          where: { booking_id: txn.booking_id, status: BOOKING_STATUS.PENDING },
+          data: { status: BOOKING_STATUS.EXPIRED, expires_at: null },
+        });
+        await prisma.slot.updateMany({
+          where: { slot_id: bookingRow.slot_id, status: 'booked' },
+          data: { status: 'available' },
+        });
+        await prisma.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: paymentId, txn_status: 'success' },
+        });
+        console.warn(`Webhook capture arrived past expiry for booking ${txn.booking_id}; expired + payment recorded, never confirmed.`);
+        return { processed: true, event: type, bookingId: txn.booking_id, confirmed: false, reason: 'past-expiry' };
+      }
       const confirmResult = await prisma.$transaction(async (tx) => {
         const confirmedCount = await tx.booking.updateMany({
           where: { booking_id: txn.booking_id, status: 'PENDING' },
-          data: { status: 'CONFIRMED' },
+          data: { status: 'CONFIRMED', expires_at: null },
         });
         if (confirmedCount.count === 0) {
           // Lost a race (cancelled/confirmed concurrently): record payment
@@ -1172,36 +1381,18 @@ export class ClientService {
 
     if (!booking) throw new NotFoundError("Booking not found");
     if (booking.user_id !== userId) throw new ValidationError("Unauthorized cancellation");
+    // P2-2: only live bookings cancel. EXPIRED/COMPLETED/CANCELLED reject.
+    assertBookingTransition(booking.status, BOOKING_STATUS.CANCELLED);
 
-    // Calculate hours until slot start time according to March 2026 Policy
-    let refundEligibility = "NO_REFUND";
-    let refundMessage = "No refund (Less than 6 hours before booking)";
-    let estimatedRefundAmount = 0;
-
-    if (booking.slot && booking.slot.date) {
-      const slotDateStr = new Date(booking.slot.date).toISOString().split('T')[0];
-      const startTimeStr = booking.slot.start_time || "00:00";
-      const slotDateTime = new Date(`${slotDateStr}T${startTimeStr.length === 5 ? startTimeStr + ":00" : startTimeStr}`);
-      const now = new Date();
-      const diffMs = slotDateTime.getTime() - now.getTime();
-      const diffHours = diffMs / (1000 * 60 * 60);
-
-      const totalPaid = Number(booking.online_amount || 0) + Number(booking.convenience_fee || 0);
-
-      if (diffHours >= 24) {
-        refundEligibility = "FULL_REFUND";
-        refundMessage = "Full refund or platform credit (minus handling fee)";
-        estimatedRefundAmount = Math.max(0, totalPaid * 0.95);
-      } else if (diffHours >= 6) {
-        refundEligibility = "PARTIAL_REFUND";
-        refundMessage = "Partial refund or platform credit (minus handling fee)";
-        estimatedRefundAmount = Math.max(0, totalPaid * 0.50);
-      } else {
-        refundEligibility = "NO_REFUND";
-        refundMessage = "No refund (Less than 6 hours before booking)";
-        estimatedRefundAmount = 0;
-      }
-    }
+    // Refund policy quote (March 2026 policy) via the shared helper so the
+    // cancel response and the refund endpoint use identical server-side math.
+    const quote = computeRefundQuote(
+      booking.online_amount, booking.convenience_fee,
+      (booking.slot as any)?.date, (booking.slot as any)?.start_time, new Date()
+    );
+    const refundEligibility = quote.eligibility;
+    const refundMessage = quote.message;
+    const estimatedRefundAmount = quote.amount;
 
     const updated = await prisma.booking.update({
       where: { booking_id: bookingId },
@@ -1213,26 +1404,59 @@ export class ClientService {
       data: { status: "available" }
     });
 
-    // Send FCM Notifications
-    if (booking.user.fcm_token) {
-      sendPushNotification(
-        booking.user.fcm_token,
-        "Booking Cancelled",
-        `Your booking at ${booking.venue.name} has been cancelled. Policy outcome: ${refundMessage}`
-      ).catch(e => console.error("FCM error notifying user of cancelled booking:", e));
+    // P2-4: roll the coupon claim back exactly once (idempotent).
+    const redemption = await prisma.couponRedemption.findFirst({
+      where: { booking_id: bookingId, status: 'applied' },
+    });
+    if (redemption) {
+      await prisma.$transaction([
+        prisma.couponRedemption.update({ where: { red_id: redemption.red_id }, data: { status: 'rolled_back' } }),
+        prisma.coupon.updateMany({ where: { coupon_id: redemption.coupon_id }, data: { used_count: { decrement: 1 } } }),
+      ]).catch(() => undefined);
+      // Clamp any accidental negative drift (never negative usage).
+      await prisma.coupon.updateMany({
+        where: { coupon_id: redemption.coupon_id, used_count: { lt: 0 } },
+        data: { used_count: 0 },
+      }).catch(() => undefined);
     }
-    if (booking.venue.partner.fcm_token) {
-      const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
-      sendPushNotification(
-        booking.venue.partner.fcm_token,
+
+    // P2-3: attempt a real refund for captured payments (best-effort; the
+    // booking stays cancelled regardless and the outcome is reported).
+    let refundStatus: any = { attempted: false };
+    try {
+      const quote = computeRefundQuote(
+        booking.online_amount, booking.convenience_fee,
+        (booking.slot as any)?.date, (booking.slot as any)?.start_time, new Date()
+      );
+      if (quote.amount > 0) {
+        const outcome = await requestBookingRefund({ bookingId, userId });
+        refundStatus = { attempted: true, ...outcome, refundTxn: undefined, refundId: outcome.refundTxn?.txn_id };
+      } else {
+        refundStatus = { attempted: false, reason: quote.eligibility };
+      }
+    } catch (err: any) {
+      refundStatus = { attempted: true, failed: true, reason: err?.message || 'refund-failed' };
+    }
+
+    const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
+    await notifyUser(
+      booking.user_id, 'booking',
+      "Booking Cancelled",
+      `Your booking at ${booking.venue.name} has been cancelled. Policy outcome: ${refundMessage}`,
+      `booking-cancelled:${bookingId}`
+    ).catch(() => undefined);
+    const cancelPartnerId = (booking.venue as any)?.partner_id;
+    if (cancelPartnerId) {
+      await notifyPartner(
+        cancelPartnerId, 'booking',
         "Booking Cancelled",
-        `Slot ${slotTime} at ${booking.venue.name} has been cancelled and is now available.`
-      ).catch(e => console.error("FCM error notifying partner of cancelled booking:", e));
+        `Slot ${slotTime} at ${booking.venue.name} has been cancelled and is now available.`,
+        `booking-cancelled:${bookingId}:${cancelPartnerId}`
+      ).catch(() => undefined);
     }
 
     WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
     WebSocketService.emitToUser(booking.user_id, 'booking_cancelled', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
-    const cancelPartnerId = (booking.venue as any)?.partner_id;
     if (cancelPartnerId) {
       WebSocketService.emitToUser(cancelPartnerId, 'booking_cancelled', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
     }
@@ -1243,7 +1467,8 @@ export class ClientService {
       refundEligibility,
       refundMessage,
       estimatedRefundAmount,
-      processingTime: "7-10 working days"
+      processingTime: "7-10 working days",
+      refund: refundStatus,
     };
   }
 
@@ -1262,29 +1487,75 @@ export class ClientService {
   }
 
   public static async registerTournament(userId: string, tournamentId: string, teamName: string) {
-    const tournament = await prisma.tournament.findUnique({ where: { tournament_id: tournamentId } });
-    if (!tournament) throw new NotFoundError("Tournament not found");
-
-    const registration = await prisma.tournamentRegistration.create({
-      data: {
-        tournament_id: tournamentId,
-        user_id: userId,
-        team_name: teamName,
-        payment_status: "paid"
+    if (!teamName || !teamName.trim()) throw new ValidationError("Team name is required");
+    const registration = await prisma.$transaction(async (tx) => {
+      const tournament = await tx.tournament.findUnique({ where: { tournament_id: tournamentId } });
+      if (!tournament) throw new NotFoundError("Tournament not found");
+      // P2-5: open-state + capacity pre-checks (authoritative guard below).
+      const gate = canRegisterTournament(tournament.status, tournament.current_participants, tournament.max_participants);
+      if (!gate.ok) {
+        throw new ConflictError(`Tournament registration not allowed (${gate.reason})`, 'TOURNAMENT_NOT_OPEN');
+      }
+      const existing = await tx.tournamentRegistration.findUnique({
+        where: { tournament_id_user_id: { tournament_id: tournamentId, user_id: userId } },
+      });
+      if (existing) throw new ConflictError("Already registered for this tournament", "DUPLICATE_REGISTRATION");
+      // Atomic capacity claim: exactly one winner for the last slot.
+      const claimed = await tx.tournament.updateMany({
+        where: {
+          tournament_id: tournamentId,
+          status: { in: ['upcoming', 'open'] },
+          current_participants: { lt: tournament.max_participants },
+        },
+        data: { current_participants: { increment: 1 } },
+      });
+      if (claimed.count === 0) {
+        throw new ConflictError("Tournament is full", "TOURNAMENT_FULL");
+      }
+      try {
+        return await tx.tournamentRegistration.create({
+          data: {
+            tournament_id: tournamentId,
+            user_id: userId,
+            team_name: teamName.trim(),
+            payment_status: "paid"
+          }
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002') throw new ConflictError("Already registered for this tournament", "DUPLICATE_REGISTRATION");
+        throw err;
       }
     });
 
-    // Send FCM Notification
-    const user = await prisma.user.findUnique({ where: { user_id: userId } });
-    if (user && user.fcm_token) {
-      sendPushNotification(
-        user.fcm_token,
-        "Tournament Registered!",
-        `You have successfully registered team '${teamName}' for the ${tournament.name} tournament.`
-      ).catch(e => console.error("FCM error notifying user of tournament registration:", e));
-    }
+    // Send notification (persisted; invalid tokens cleaned by the helper).
+    const tournament = await prisma.tournament.findUnique({ where: { tournament_id: tournamentId } });
+    await notifyUser(
+      userId, 'tournament',
+      "Tournament Registered!",
+      `You have successfully registered team '${teamName.trim()}' for the ${tournament?.name ?? 'tournament'}.`,
+      `tournament-registered:${tournamentId}:${userId}`
+    ).catch(() => undefined);
 
     return registration;
+  }
+
+  /**
+   * P2-5: registration cancellation frees capacity exactly once (delete +
+   * guarded decrement in one transaction; repeat cancels 404 on the missing row).
+   */
+  public static async cancelTournamentRegistration(userId: string, tournamentId: string) {
+    return prisma.$transaction(async (tx) => {
+      const reg = await tx.tournamentRegistration.findUnique({
+        where: { tournament_id_user_id: { tournament_id: tournamentId, user_id: userId } },
+      });
+      if (!reg) throw new NotFoundError("Registration not found");
+      await tx.tournamentRegistration.delete({ where: { reg_id: reg.reg_id } });
+      await tx.tournament.updateMany({
+        where: { tournament_id: tournamentId, current_participants: { gt: 0 } },
+        data: { current_participants: { decrement: 1 } },
+      });
+      return { cancelled: true };
+    });
   }
 
   // 8. Notifications
@@ -1568,14 +1839,13 @@ export class ClientService {
       data: { status: 'CONFIRMED' }
     });
 
-    // Send FCM Notification
-    if (booking.user.fcm_token) {
-      sendPushNotification(
-        booking.user.fcm_token,
-        "Checked In!",
-        `You have checked in successfully at ${booking.venue.name}. Enjoy your game!`
-      ).catch(e => console.error("FCM error notifying user of check-in:", e));
-    }
+    // P2-9: persisted + deduped check-in notification.
+    await notifyUser(
+      booking.user_id, 'booking',
+      "Checked In!",
+      `You have checked in successfully at ${booking.venue.name}. Enjoy your game!`,
+      `checked-in:${bookingId}`
+    ).catch(() => undefined);
 
     WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }));
     WebSocketService.emitToUser(booking.user_id, 'checked_in', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }, { includePrivate: true }));

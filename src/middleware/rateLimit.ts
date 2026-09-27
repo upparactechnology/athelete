@@ -26,3 +26,6 @@ export const googleLoginLimiter = limiter(10 * 60 * 1000, 20);
 
 /** Payment verification: max 30 per 10 minutes per IP. */
 export const paymentVerifyLimiter = limiter(10 * 60 * 1000, 30);
+
+/** Session refresh/logout: max 30 per 10 minutes per IP. */
+export const sessionLimiter = limiter(10 * 60 * 1000, 30);

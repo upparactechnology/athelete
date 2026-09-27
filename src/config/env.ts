@@ -27,6 +27,10 @@ const envSchema = z.object({
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   // Explicit opt-in for simulated payments. NEVER enabled in production.
   ALLOW_MOCK_PAYMENTS: z.enum(['true', 'false']).default('false'),
+  // P2-1: unpaid PENDING booking lifetime (minutes) before expiry releases slot.
+  BOOKING_EXPIRY_MINUTES: z.coerce.number().default(30),
+  BOOKING_EXPIRY_BATCH: z.coerce.number().default(100),
+  BOOKING_EXPIRY_INTERVAL_MS: z.coerce.number().default(60_000),
 });
 
 const parsed = envSchema.safeParse(process.env);

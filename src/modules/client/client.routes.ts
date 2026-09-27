@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { ClientController } from './client.controller.js';
 import { authenticate } from '../../middleware/authenticate.js';
 import { authorize } from '../../middleware/authorize.js';
-import { googleLoginLimiter, otpRequestLimiter, otpVerifyLimiter, paymentVerifyLimiter } from '../../middleware/rateLimit.js';
+import { googleLoginLimiter, otpRequestLimiter, otpVerifyLimiter, paymentVerifyLimiter, sessionLimiter } from '../../middleware/rateLimit.js';
 import { upload, uploadPrivate } from '../../middleware/upload.js';
 
 export const clientRoutes = Router();
@@ -11,6 +11,9 @@ export const clientRoutes = Router();
 clientRoutes.post('/auth/request-otp', otpRequestLimiter, ClientController.requestOtp);
 clientRoutes.post('/auth/verify-otp', otpVerifyLimiter, ClientController.verifyOtp);
 clientRoutes.post('/auth/google', googleLoginLimiter, ClientController.googleLogin);
+// P2-7: refresh rotation + logout (public bearer-of-token endpoints).
+clientRoutes.post('/auth/refresh', sessionLimiter, ClientController.refreshAccessToken);
+clientRoutes.post('/auth/logout', sessionLimiter, ClientController.logout);
 
 // Razorpay webhook: public, verified by HMAC over the raw body (raw parser
 // is mounted for this exact path in app.ts before express.json).
@@ -51,6 +54,8 @@ clientRoutes.patch('/bookings/:id/cancel', ClientController.cancelBooking);
 // Payments
 clientRoutes.post('/payments/initiate', ClientController.initiatePayment);
 clientRoutes.post('/payments/verify', paymentVerifyLimiter, ClientController.verifyPayment);
+// P2-3: user-initiated refund for own booking (server-computed amount).
+clientRoutes.post('/payments/refund', paymentVerifyLimiter, ClientController.requestRefund);
 clientRoutes.post('/payments/wallet/initiate', ClientController.initiateWalletPayment);
 clientRoutes.post('/payments/wallet/verify', paymentVerifyLimiter, ClientController.verifyWalletPayment);
 
@@ -58,6 +63,8 @@ clientRoutes.post('/payments/wallet/verify', paymentVerifyLimiter, ClientControl
 clientRoutes.get('/coupons', ClientController.getCoupons);
 clientRoutes.get('/tournaments', ClientController.getTournaments);
 clientRoutes.post('/tournaments/:tournamentId/register', ClientController.registerTournament);
+// P2-5: cancel own registration (frees capacity exactly once).
+clientRoutes.delete('/tournaments/:tournamentId/register', ClientController.cancelTournamentRegistration);
 
 // Notifications & Chat
 clientRoutes.get('/notifications', ClientController.getNotifications);

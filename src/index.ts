@@ -27,6 +27,11 @@ async function bootstrap() {
     // 5. Initialize WebSocket Server
     const { WebSocketService } = await import('./shared/services/websocket.js');
     WebSocketService.init(server);
+
+    // 6. P2-1: pending-booking expiry sweeper (interval + Redis advisory lock,
+    // safe under multi-instance deploys). Server-side only; no client needed.
+    const { startExpiryJob } = await import('./shared/services/expiryJob.js');
+    startExpiryJob({ intervalMs: env.BOOKING_EXPIRY_INTERVAL_MS, batchSize: env.BOOKING_EXPIRY_BATCH });
   } catch (err) {
     logger.error("Startup failed:", err);
     process.exit(1);

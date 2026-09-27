@@ -33,6 +33,10 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       if (!partner) {
         return next(new UnauthorizedError("Partner profile no longer exists. Please log in again."));
       }
+      // P2-8: anonymized/deleted partner accounts cannot authenticate.
+      if ((partner as any).kyc_status === 'deleted') {
+        return next(new UnauthorizedError("This account is no longer active. Please contact support."));
+      }
     }
 
     req.user = {

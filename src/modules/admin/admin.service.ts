@@ -10,6 +10,8 @@ import {
 } from '../../shared/utils/errors.js';
 import { WebSocketService } from '../../shared/services/websocket.js';
 import { sendPushNotification } from '../../config/fcm.js';
+import { createSession } from '../../shared/utils/sessions.js';
+import { assertBookingTransition } from '../../shared/utils/bookingLifecycle.js';
 import {
   sanitizeBookingForResponse,
   toAdminPartner,
@@ -31,25 +33,7 @@ export class AdminService {
       throw new ValidationError("Invalid admin email or password");
     }
 
-    const payload = {
-      sub: "admin-id-default",
-      role: "admin",
-      status: "active"
-    };
-
-    const token = jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: '1d' });
-    const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
-
-    // Store refresh token
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await prisma.refreshToken.create({
-      data: {
-        user_id: "00000000-0000-0000-0000-000000000000",
-        role: "admin",
-        token_hash: bcrypt.hashSync(refreshToken, 10),
-        expires_at: expiresAt
-      }
-    });
+    const { accessToken: token, refreshToken } = await createSession("00000000-0000-0000-0000-000000000000", "admin");
 
     return { token, refreshToken };
   }
@@ -333,9 +317,8 @@ export class AdminService {
     });
 
     if (!booking) throw new NotFoundError("Booking not found");
-    if (booking.status === "CANCELLED") {
-      throw new ConflictError("Booking is already cancelled");
-    }
+    // P2-2: only live bookings cancel (replaces the CANCELLED-only check).
+    assertBookingTransition(booking.status, "CANCELLED");
 
     const updated = await prisma.booking.update({
       where: { booking_id: bookingId },
@@ -348,21 +331,36 @@ export class AdminService {
       data: { status: "available" }
     });
 
-    // Log refund transaction
-    await prisma.transaction.create({
-      data: {
-        booking_id: bookingId,
-        razorpay_order_id: `REFUND-${booking.booking_id.substring(0, 8)}`,
-        razorpay_payment_id: "REFUND_INTERNAL",
-        txn_type: "refund",
-        txn_status: "success",
-        amount: booking.online_amount
-      }
-    });
+    // P2-4: roll back any applied coupon claim (idempotent).
+    const redemption = await prisma.couponRedemption.findFirst({
+      where: { booking_id: bookingId, status: 'applied' },
+    }).catch(() => null);
+    if (redemption) {
+      await prisma.couponRedemption.update({
+        where: { red_id: redemption.red_id }, data: { status: 'rolled_back' }
+      }).catch(() => undefined);
+      await prisma.coupon.updateMany({
+        where: { coupon_id: redemption.coupon_id }, data: { used_count: { decrement: 1 } }
+      }).catch(() => undefined);
+      await prisma.coupon.updateMany({
+        where: { coupon_id: redemption.coupon_id, used_count: { lt: 0 } }, data: { used_count: 0 }
+      }).catch(() => undefined);
+    }
+
+    // P2-3: attempt a REAL refund for captured payments instead of writing
+    // fake ledger rows. Best-effort: the booking stays cancelled regardless.
+    let refund: any = { attempted: false };
+    try {
+      const { requestBookingRefund } = await import('../../shared/services/refunds.js');
+      const outcome = await requestBookingRefund({ bookingId, isAdmin: true });
+      refund = { attempted: true, duplicate: outcome.duplicate, amount: outcome.amount, eligibility: outcome.eligibility, gateway: outcome.gateway };
+    } catch (err: any) {
+      refund = { attempted: true, failed: true, reason: err?.message || 'refund-failed' };
+    }
 
     WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
     WebSocketService.broadcast('slots', [updatedSlot]);
-    return updated;
+    return { ...updated, refund };
   }
 
   public static async reassignBookingSlot(bookingId: string, newSlotId: string) {

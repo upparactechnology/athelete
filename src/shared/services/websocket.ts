@@ -12,6 +12,24 @@ interface AuthedSocket {
   role: UserRole;
 }
 
+/** P2-8: live account-status gate for socket upgrades. */
+async function checkSocketIdentity(payload: JwtAccessPayload): Promise<boolean> {
+  try {
+    if (payload.role === 'user') {
+      const user = await prisma.user.findUnique({ where: { user_id: payload.sub }, select: { status: true } });
+      return !!user && user.status === 'Active';
+    }
+    if (payload.role === 'partner') {
+      const partner = await prisma.partner.findUnique({ where: { partner_id: payload.sub }, select: { kyc_status: true } });
+      return !!partner && (partner as any).kyc_status !== 'deleted';
+    }
+    if (payload.role === 'admin') return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Authenticated WebSocket service (P0).
  * - The HTTP upgrade MUST carry a valid JWT (`?token=` or Authorization
@@ -49,8 +67,24 @@ export class WebSocketService {
         socket.destroy();
         return;
       }
-      this.wss?.handleUpgrade(request, socket, head, (ws) => {
-        this.wss?.emit('connection', ws, request, payload);
+      // P2-8: reject deleted/deactivated accounts at connect time (async DB check).
+      checkSocketIdentity(payload).then((active) => {
+        if (!active) {
+          logger.warn('Rejected WebSocket upgrade for inactive/deleted account.');
+          try {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          } catch { /* ignore */ }
+          socket.destroy();
+          return;
+        }
+        this.wss?.handleUpgrade(request, socket, head, (ws) => {
+          this.wss?.emit('connection', ws, request, payload);
+        });
+      }).catch(() => {
+        try {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        } catch { /* ignore */ }
+        socket.destroy();
       });
     });
 
