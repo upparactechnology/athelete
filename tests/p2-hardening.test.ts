@@ -1200,16 +1200,22 @@ describe('applyStaleDecision paths (UNIT, fake DB)', () => {  function seedPendi
 
   it('9. webhook-won race: loser converges instead of clobbering', async () => {
     const db = makeFakeDb() as any;
+    db.transaction.rows.push({
+      txn_id: 'cap1', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'pay_1', txn_type: 'capture', txn_status: 'success',
+      amount: 1000, created_at: new Date(Date.now() - 3600000),
+    });
     seedPending(db, 'success'); // webhook already finalized it
     db.transaction.rows.push({
       txn_id: 'other', booking_id: 'b1', razorpay_order_id: 'order_1',
       razorpay_payment_id: 'rfnd_x', txn_type: 'refund', txn_status: 'success', amount: 500,
       created_at: new Date(),
     });
-    const staleView = { ...db.transaction.rows[0], txn_status: 'pending' };
+    const staleView = { ...db.transaction.rows.find((t: any) => t.txn_id === 'stale1'), txn_status: 'pending' };
     const out = await applyStaleDecision(db, staleView, { action: 'adopt', refundId: 'rfnd_x', status: 'processed' }, 'FULL_REFUND');
     // Row is no longer pending in the DB: conditional update misses, we converge.
-    expect(out).toMatchObject({ status: 'duplicate' });
+    // Ledger: 1000 captured - 1000 succeeded = 0 -> truthfully fully refunded.
+    expect(out).toMatchObject({ status: 'duplicate', eligibility: 'ALREADY_REFUNDED', remainingRefundableAmount: 0 });
     expect(db.transaction.rows.find((t: any) => t.txn_id === 'stale1').txn_status).toBe('success');
   });
 
@@ -1261,5 +1267,135 @@ describe('applyStaleDecision paths (UNIT, fake DB)', () => {  function seedPendi
       expect(decideStaleRecovery({ state: 'unknown', items: [], reason }, row, { paymentId: 'pay_1', amountPaise: 50000 }))
         .toMatchObject({ action: 'wait' });
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Converge truthfulness: ALREADY_REFUNDED only on a proven zero       */
+/* remainder. UNIT (fake DB). Live PG concurrency NOT TESTED.          */
+/* ------------------------------------------------------------------ */
+
+describe('Converge ledger truth (UNIT, fake DB)', () => {
+  function seedLedger(db: any, opts: { capture?: number; success?: number[]; pendings?: number[] }) {
+    db.transaction.rows.push({
+      txn_id: 'cap1', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'pay_1', txn_type: 'capture', txn_status: 'success',
+      amount: opts.capture ?? 1000, created_at: new Date(Date.now() - 3600000),
+    });
+    let i = 0;
+    for (const a of opts.success ?? []) {
+      db.transaction.rows.push({
+        txn_id: `ok${i}`, booking_id: 'b1', razorpay_order_id: 'order_1',
+        razorpay_payment_id: `rfnd_ok${i}`, txn_type: 'refund', txn_status: 'success',
+        amount: a, created_at: new Date(Date.now() - 1800000 + i),
+      });
+      i += 1;
+    }
+    let j = 0;
+    for (const a of opts.pendings ?? []) {
+      db.transaction.rows.push({
+        txn_id: `pend${j}`, booking_id: 'b1', razorpay_order_id: 'order_1',
+        razorpay_payment_id: null, txn_type: 'refund', txn_status: 'pending',
+        amount: a, created_at: new Date(Date.now() - 600000 + j),
+      });
+      j += 1;
+    }
+  }
+
+  function rowCount(db: any) {
+    return db.transaction.rows.length;
+  }
+
+  it('1. partial success winner does NOT return ALREADY_REFUNDED', async () => {
+    const db = makeFakeDb() as any;
+    seedLedger(db, { capture: 1000, success: [400], pendings: [500] });
+    // Webhook wins the race: the stale pending row is already success.
+    db.transaction.rows.find((t: any) => t.txn_id === 'pend0').txn_status = 'success';
+    const before = rowCount(db);
+    const staleView = { txn_id: 'pend0', booking_id: 'b1', amount: 500 };
+    const { applyStaleDecision } = await import('../src/shared/services/refunds.js');
+    const out = await applyStaleDecision(db, staleView, { action: 'adopt', refundId: 'rfnd_x', status: 'processed' }, 'FULL_REFUND');
+    expect(out).toMatchObject({ status: 'duplicate' });
+    expect(out && (out as any).eligibility).not.toBe('ALREADY_REFUNDED');
+    expect(out && (out as any).eligibility).toBe('FULL_REFUND');
+    expect(out && (out as any).remainingRefundableAmount).toBe(100);
+    expect(rowCount(db)).toBe(before); // convergence creates nothing
+  });
+
+  it('2. full success winner DOES return ALREADY_REFUNDED', async () => {
+    const db = makeFakeDb() as any;
+    seedLedger(db, { capture: 1000, success: [1000], pendings: [200] });
+    db.transaction.rows.find((t: any) => t.txn_id === 'pend0').txn_status = 'success';
+    const before = rowCount(db);
+    const staleView = { txn_id: 'pend0', booking_id: 'b1', amount: 200 };
+    const { applyStaleDecision } = await import('../src/shared/services/refunds.js');
+    const out = await applyStaleDecision(db, staleView, { action: 'adopt', refundId: 'rfnd_x', status: 'processed' }, 'FULL_REFUND');
+    expect(out).toMatchObject({ status: 'duplicate', eligibility: 'ALREADY_REFUNDED', remainingRefundableAmount: 0 });
+    expect(rowCount(db)).toBe(before);
+  });
+
+  it('3. multiple partial successes calculate the remainder correctly', async () => {
+    const db = makeFakeDb() as any;
+    seedLedger(db, { capture: 1000, success: [400, 300], pendings: [300] });
+    db.transaction.rows.find((t: any) => t.txn_id === 'pend0').txn_status = 'success';
+    const staleView = { txn_id: 'pend0', booking_id: 'b1', amount: 300 };
+    const { applyStaleDecision } = await import('../src/shared/services/refunds.js');
+    const out = await applyStaleDecision(db, staleView, { action: 'adopt', refundId: 'rfnd_x', status: 'processed' }, 'FULL_REFUND');
+    // 1000 - 1000 reserved/consumed = 0 -> fully refunded is valid.
+    expect(out).toMatchObject({ eligibility: 'ALREADY_REFUNDED', remainingRefundableAmount: 0 });
+  });
+
+  it('4. success + pending totals: remainder stays refundable, no ALREADY flag', async () => {
+    const db = makeFakeDb() as any;
+    seedLedger(db, { capture: 1000, success: [400], pendings: [200] });
+    // A second stale row raced and terminally failed; converge on truth.
+    db.transaction.rows.push({
+      txn_id: 'staleX', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: null, txn_type: 'refund', txn_status: 'failed',
+      amount: 200, created_at: new Date(),
+    });
+    const staleView = { txn_id: 'staleX', booking_id: 'b1', amount: 200 };
+    const { applyStaleDecision } = await import('../src/shared/services/refunds.js');
+    const out = await applyStaleDecision(db, staleView, { action: 'adopt', refundId: 'rfnd_x', status: 'processed' }, 'PARTIAL_REFUND');
+    // Conditional update misses (row failed) -> converge finds pending200:
+    // 1000 - 400 - 200 = 400 remains -> in_flight, never ALREADY_REFUNDED.
+    expect(out && (out as any).eligibility).not.toBe('ALREADY_REFUNDED');
+    expect(out && (out as any).remainingRefundableAmount).toBe(400);
+    expect(out && (out as any).status).toBe('in_flight');
+  });
+
+  it('5. convergence never creates another refund row', async () => {
+    const db = makeFakeDb() as any;
+    seedLedger(db, { capture: 1000, success: [400], pendings: [200] });
+    const before = rowCount(db);
+    const staleView = { txn_id: 'pend0', booking_id: 'b1', amount: 200 };
+    const { applyStaleDecision } = await import('../src/shared/services/refunds.js');
+    // Supersede path on an already-flipped row converges without writes.
+    db.transaction.rows.find((t: any) => t.txn_id === 'pend0').txn_status = 'success';
+    const out = await applyStaleDecision(db, staleView, { action: 'supersede' }, 'FULL_REFUND');
+    expect(out).toBeTruthy();
+    expect(rowCount(db)).toBe(before);
+  });
+
+  it('6. P2002 pending-intent path converges via ledger truth (static)', () => {
+    const src = fs.readFileSync(new URL('../src/shared/services/refunds.ts', import.meta.url), 'utf8');
+    expect(src).toContain('convergeOnRefundWinner');
+    // The P2002 branch must not hardcode ALREADY_REFUNDED on success winners.
+    const p2002Block = src.slice(src.indexOf("err?.code === 'P2002'"), src.indexOf("err?.code === 'P2002'") + 2500);
+    expect(p2002Block).not.toContain("'ALREADY_REFUNDED'");
+    expect(p2002Block).toContain('convergeOnRefundWinner');
+  });
+
+  it('7. stale reconciliation still routes through conditional decisions', async () => {
+    const db = makeFakeDb() as any;
+    seedLedger(db, { capture: 1000, success: [], pendings: [] });
+    // Unknown lookup keeps the row pending (decision-level, no DB write).
+    const { decideStaleRecovery } = await import('../src/shared/services/refunds.js');
+    const d = decideStaleRecovery(
+      { state: 'unknown', items: [], reason: 'gateway-timeout' },
+      { amount: 500, razorpay_payment_id: null },
+      { paymentId: 'pay_1', amountPaise: 50000 }
+    );
+    expect(d).toMatchObject({ action: 'wait' });
   });
 });

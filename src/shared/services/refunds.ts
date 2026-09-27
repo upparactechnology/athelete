@@ -303,6 +303,8 @@ export interface RefundOutcome {
   gateway: 'razorpay' | 'mock';
   status: 'initiated' | 'succeeded' | 'in_flight' | 'duplicate';
   reason?: string;
+  /** Server-computed remainder at convergence time (when evaluated). */
+  remainingRefundableAmount?: number;
 }
 
 /**
@@ -443,16 +445,28 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
       });
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        const winner = await tx.transaction.findFirst({
-          where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: { in: ['pending', 'success'] } },
-          orderBy: { created_at: 'desc' },
+        // Another request won the single pending-intent slot: converge on
+        // the true ledger state (totals recomputed; partial success is NOT
+        // reported as fully refunded). A null return means the slot freed
+        // up — retry the create exactly once.
+        const converged = await convergeOnRefundWinner(
+          tx, { booking_id: req.bookingId, txn_id: '', amount },
+          quote.eligibility
+        );
+        if (converged) return converged as RefundOutcome;
+        intent = await tx.transaction.create({
+          data: {
+            booking_id: req.bookingId,
+            razorpay_order_id: capture.razorpay_order_id,
+            razorpay_payment_id: null,
+            txn_type: 'refund',
+            txn_status: 'pending',
+            amount,
+          },
         });
-        if (winner?.txn_status === 'success') {
-          return { duplicate: true, refundTxn: winner, amount: Number(winner.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate' } as RefundOutcome;
-        }
-        return { duplicate: true, inFlight: true, refundTxn: winner, amount: Number(winner?.amount ?? amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
+      } else {
+        throw err;
       }
-      throw err;
     }
     return { intent, amount, capture, booking, quote } as any;
   }).then(async (claimed: any) => {
@@ -539,16 +553,55 @@ export async function reconcileStalePending(
   return applyStaleDecision(tx, pendingRow, decision, eligibility);
 }
 
-/** Shared convergence: report the winning refund row instead of clobbering. */
-async function convergeOnRefundWinner(tx: any, pendingRow: any, eligibility: string): Promise<RefundOutcome> {
+/** Shared convergence: report the winning refund row instead of clobbering.
+ *
+ * TRUTHFULNESS RULE (partial-refund safe): 'ALREADY_REFUNDED' is returned
+ * only when the recomputed ledger proves nothing remains refundable
+ * (captured - success - pending <= 0). A success winner with a positive
+ * remainder is reported as a duplicate WITHOUT the fully-refunded label;
+ * the remainder is included so callers can act on it. No financial
+ * mutation happens here — this function only reads.
+ */
+async function convergeOnRefundWinner(tx: any, pendingRow: any, eligibility: string): Promise<RefundOutcome | null> {
+  const bookingId = pendingRow.booking_id;
   const winner = await tx.transaction.findFirst({
-    where: { booking_id: pendingRow.booking_id, txn_type: 'refund', txn_status: { in: ['pending', 'success'] } },
+    where: { booking_id: bookingId, txn_type: 'refund', txn_status: { in: ['pending', 'success'] } },
     orderBy: { created_at: 'desc' },
   });
-  if (winner?.txn_status === 'success') {
-    return { duplicate: true, refundTxn: winner, amount: Number(winner.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate' };
+  if (!winner) {
+    // No pending/success row at all: the stale row must have terminally
+    // failed (or vanished) — caller may proceed to a fresh intent.
+    const current = await tx.transaction.findUnique({ where: { txn_id: pendingRow.txn_id } }).catch(() => null);
+    if (!current || current.txn_status === 'failed') return null;
+    return { duplicate: true, inFlight: true, refundTxn: current, amount: Number(current.amount ?? pendingRow.amount), eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' };
   }
-  return { duplicate: true, inFlight: true, refundTxn: winner ?? pendingRow, amount: Number(winner?.amount ?? pendingRow.amount), eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' };
+  const [capture, successRows, pendingRows] = await Promise.all([
+    tx.transaction.findFirst({ where: { booking_id: bookingId, txn_type: 'capture', txn_status: 'success' } }),
+    tx.transaction.findMany({ where: { booking_id: bookingId, txn_type: 'refund', txn_status: 'success' }, select: { amount: true } }),
+    tx.transaction.findMany({ where: { booking_id: bookingId, txn_type: 'refund', txn_status: 'pending' }, select: { amount: true } }),
+  ]);
+  if (!capture) {
+    // No capture to account against: fail closed, block creation.
+    return { duplicate: true, inFlight: true, refundTxn: winner, amount: Number(winner.amount), eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' };
+  }
+  const totals = computeRefundTotals(
+    Number(capture.amount),
+    successRows.map((r: any) => Number(r.amount)),
+    pendingRows.map((r: any) => Number(r.amount)),
+    Number(capture.amount)
+  );
+  if (totals.remainingRefundableAmount <= 0) {
+    if (winner.txn_status === 'success') {
+      return { duplicate: true, refundTxn: winner, amount: Number(winner.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate', remainingRefundableAmount: 0 };
+    }
+    // Fully reserved by a still-pending intent: truthfully in-flight.
+    return { duplicate: true, inFlight: true, refundTxn: winner, amount: Number(winner.amount), eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active', remainingRefundableAmount: 0 };
+  }
+  if (winner.txn_status === 'success') {
+    // Partial success: duplicate WITHOUT the fully-refunded label.
+    return { duplicate: true, refundTxn: winner, amount: Number(winner.amount), eligibility, gateway: 'razorpay', status: 'duplicate', remainingRefundableAmount: totals.remainingRefundableAmount };
+  }
+  return { duplicate: true, inFlight: true, refundTxn: winner, amount: Number(winner.amount), eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active', remainingRefundableAmount: totals.remainingRefundableAmount };
 }
 
 /**
