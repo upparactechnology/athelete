@@ -39,6 +39,7 @@ import {
 } from '../../shared/utils/bookingLifecycle.js';
 import { notifyPartner, notifyUser } from '../../shared/services/notifications.js';
 import { requestBookingRefund } from '../../shared/services/refunds.js';
+import { rollbackCouponForBooking } from '../../shared/services/coupons.js';
 import { createSession, refreshSession, revokeAllSessions, revokeSession } from '../../shared/utils/sessions.js';
 import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
 
@@ -1404,20 +1405,13 @@ export class ClientService {
       data: { status: "available" }
     });
 
-    // P2-4: roll the coupon claim back exactly once (idempotent).
-    const redemption = await prisma.couponRedemption.findFirst({
-      where: { booking_id: bookingId, status: 'applied' },
-    });
-    if (redemption) {
-      await prisma.$transaction([
-        prisma.couponRedemption.update({ where: { red_id: redemption.red_id }, data: { status: 'rolled_back' } }),
-        prisma.coupon.updateMany({ where: { coupon_id: redemption.coupon_id }, data: { used_count: { decrement: 1 } } }),
-      ]).catch(() => undefined);
-      // Clamp any accidental negative drift (never negative usage).
-      await prisma.coupon.updateMany({
-        where: { coupon_id: redemption.coupon_id, used_count: { lt: 0 } },
-        data: { used_count: 0 },
-      }).catch(() => undefined);
+    // P2-4/P2-7: roll the coupon claim back exactly once (idempotent,
+    // concurrent-cancellation safe). Reported, never silently swallowed.
+    let couponRollback: any = { rolledBack: false };
+    try {
+      couponRollback = await rollbackCouponForBooking(bookingId);
+    } catch (err: any) {
+      couponRollback = { rolledBack: false, error: err?.message || 'coupon-rollback-failed' };
     }
 
     // P2-3: attempt a real refund for captured payments (best-effort; the
@@ -1469,6 +1463,7 @@ export class ClientService {
       estimatedRefundAmount,
       processingTime: "7-10 working days",
       refund: refundStatus,
+      coupon: couponRollback,
     };
   }
 

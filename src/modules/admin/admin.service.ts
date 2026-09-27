@@ -331,20 +331,13 @@ export class AdminService {
       data: { status: "available" }
     });
 
-    // P2-4: roll back any applied coupon claim (idempotent).
-    const redemption = await prisma.couponRedemption.findFirst({
-      where: { booking_id: bookingId, status: 'applied' },
-    }).catch(() => null);
-    if (redemption) {
-      await prisma.couponRedemption.update({
-        where: { red_id: redemption.red_id }, data: { status: 'rolled_back' }
-      }).catch(() => undefined);
-      await prisma.coupon.updateMany({
-        where: { coupon_id: redemption.coupon_id }, data: { used_count: { decrement: 1 } }
-      }).catch(() => undefined);
-      await prisma.coupon.updateMany({
-        where: { coupon_id: redemption.coupon_id, used_count: { lt: 0 } }, data: { used_count: 0 }
-      }).catch(() => undefined);
+    // P2-4/P2-7: roll back any applied coupon claim (idempotent, race-safe).
+    let coupon: any = { rolledBack: false };
+    try {
+      const { rollbackCouponForBooking } = await import('../../shared/services/coupons.js');
+      coupon = await rollbackCouponForBooking(bookingId);
+    } catch (err: any) {
+      coupon = { rolledBack: false, error: err?.message || 'coupon-rollback-failed' };
     }
 
     // P2-3: attempt a REAL refund for captured payments instead of writing
@@ -360,7 +353,7 @@ export class AdminService {
 
     WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
     WebSocketService.broadcast('slots', [updatedSlot]);
-    return { ...updated, refund };
+    return { ...updated, refund, coupon };
   }
 
   public static async reassignBookingSlot(bookingId: string, newSlotId: string) {

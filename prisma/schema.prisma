@@ -308,7 +308,11 @@ model UserNotification {
   body              String
   is_read           Boolean  @default(false)
   created_at        DateTime @default(now()) @db.Timestamptz
+  // P2-9: durable per-recipient event dedupe. NULL = no dedupe requested
+  // (legacy rows stay valid; NULLs never collide in Postgres).
+  dedupe_key        String?
 
+  @@unique([recipient_id, dedupe_key])
   @@map("user_notifications")
 }
 

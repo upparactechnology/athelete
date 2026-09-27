@@ -8,6 +8,8 @@ export interface PushResult {
   sent: boolean;
   invalidToken: boolean;
   persisted: boolean;
+  /** True when another request already recorded this event. */
+  duplicate?: boolean;
 }
 
 /**
@@ -48,21 +50,45 @@ async function sendToToken(token: string, title: string, body: string): Promise<
   }
 }
 
+/**
+ * Durable inbox write. With a dedupeKey, exactly one row per
+ * (recipient, key) exists: concurrent writers converge via the unique
+ * constraint and losers are reported as duplicates (no second push).
+ * Without a key, every call persists (legacy behavior preserved).
+ */
 async function persistNotification(
   recipientId: string,
   recipientType: 'user' | 'partner',
   category: string,
   title: string,
-  body: string
-): Promise<boolean> {
+  body: string,
+  dedupeKey?: string
+): Promise<{ persisted: boolean; duplicate: boolean }> {
+  if (!dedupeKey) {
+    try {
+      await prisma.userNotification.create({
+        data: { recipient_id: recipientId, recipient_type: recipientType, category, title, body },
+      });
+      return { persisted: true, duplicate: false };
+    } catch (err) {
+      logger.error('Failed to persist notification:', err);
+      return { persisted: false, duplicate: false };
+    }
+  }
   try {
     await prisma.userNotification.create({
-      data: { recipient_id: recipientId, recipient_type: recipientType, category, title, body },
+      data: {
+        recipient_id: recipientId, recipient_type: recipientType, category, title, body,
+        dedupe_key: dedupeKey,
+      },
     });
-    return true;
-  } catch (err) {
+    return { persisted: true, duplicate: false };
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      return { persisted: true, duplicate: true };
+    }
     logger.error('Failed to persist notification:', err);
-    return false;
+    return { persisted: false, duplicate: false };
   }
 }
 
@@ -79,16 +105,24 @@ export async function notifyUser(
   body: string,
   dedupeKey?: string
 ): Promise<PushResult> {
-  const proceed = await claimDedupe(dedupeKey).catch(() => true);
-  const persisted = await persistNotification(userId, 'user', category, title, body);
-  if (!proceed) return { sent: false, invalidToken: false, persisted };
+  const redisClaim = await claimDedupe(dedupeKey).catch(() => true);
+  // Durable claim first: only the writer of the inbox row may push.
+  // (The partial-unique index may not exist pre-migration; then the Redis
+  // claim alone dedupes best-effort and behavior matches the old path.)
+  let wrote = { persisted: false, duplicate: false };
+  try {
+    wrote = await persistNotification(userId, 'user', category, title, body, dedupeKey);
+  } catch {
+    wrote = { persisted: false, duplicate: false };
+  }
+  if (wrote.duplicate || !redisClaim) return { sent: false, invalidToken: false, persisted: true, duplicate: true };
   const user = await prisma.user.findUnique({ where: { user_id: userId }, select: { fcm_token: true } });
-  if (!user?.fcm_token) return { sent: false, invalidToken: false, persisted };
+  if (!user?.fcm_token) return { sent: false, invalidToken: false, persisted: wrote.persisted };
   const { sent, invalidToken } = await sendToToken(user.fcm_token, title, body);
   if (invalidToken) {
     await prisma.user.update({ where: { user_id: userId }, data: { fcm_token: null } }).catch(() => undefined);
   }
-  return { sent, invalidToken, persisted };
+  return { sent, invalidToken, persisted: wrote.persisted };
 }
 
 export async function notifyPartner(
@@ -98,16 +132,21 @@ export async function notifyPartner(
   body: string,
   dedupeKey?: string
 ): Promise<PushResult> {
-  const proceed = await claimDedupe(dedupeKey).catch(() => true);
-  const persisted = await persistNotification(partnerId, 'partner', category, title, body);
-  if (!proceed) return { sent: false, invalidToken: false, persisted };
+  const redisClaim = await claimDedupe(dedupeKey).catch(() => true);
+  let wrote = { persisted: false, duplicate: false };
+  try {
+    wrote = await persistNotification(partnerId, 'partner', category, title, body, dedupeKey);
+  } catch {
+    wrote = { persisted: false, duplicate: false };
+  }
+  if (wrote.duplicate || !redisClaim) return { sent: false, invalidToken: false, persisted: true, duplicate: true };
   const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId }, select: { fcm_token: true } });
-  if (!partner?.fcm_token) return { sent: false, invalidToken: false, persisted };
+  if (!partner?.fcm_token) return { sent: false, invalidToken: false, persisted: wrote.persisted };
   const { sent, invalidToken } = await sendToToken(partner.fcm_token, title, body);
   if (invalidToken) {
     await prisma.partner.update({ where: { partner_id: partnerId }, data: { fcm_token: null } }).catch(() => undefined);
   }
-  return { sent, invalidToken, persisted };
+  return { sent, invalidToken, persisted: wrote.persisted };
 }
 
 /** Test helper: pure classification of FCM error codes. */
