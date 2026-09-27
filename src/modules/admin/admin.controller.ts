@@ -88,6 +88,20 @@ export class AdminController {
     }
   }
 
+  // 6b. Private KYC document download (admin-only; files never public).
+  public static async downloadKycDocument(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const abs = await AdminService.resolveKycDocumentFile(id);
+      if (!abs) {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Document file not found' } });
+      }
+      return res.sendFile(abs);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // 7. Venue Management
   public static async getAllVenues(req: AuthRequest, res: Response, next: NextFunction) {
     try {

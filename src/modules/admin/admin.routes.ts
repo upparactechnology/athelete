@@ -30,6 +30,7 @@ adminRoutes.patch('/partners/:id/bank-reject', AdminController.rejectBankDetails
 
 adminRoutes.get('/kyc/pending', AdminController.getPendingKycDocuments);
 adminRoutes.patch('/kyc/document/:id', AdminController.updateKycDocumentStatus);
+adminRoutes.get('/kyc/document/:id/file', AdminController.downloadKycDocument);
 
 // Venues CRUD
 adminRoutes.get('/venues', AdminController.getAllVenues);

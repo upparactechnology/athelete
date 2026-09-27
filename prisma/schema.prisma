@@ -109,6 +109,8 @@ model Slot {
   venue             Venue     @relation(fields: [venue_id], references: [venue_id], onDelete: Cascade)
   bookings          Booking[]
 
+  // P0: database-level guard against duplicate slot generation races.
+  @@unique([venue_id, date, start_time, end_time])
   @@map("slots")
 }
 

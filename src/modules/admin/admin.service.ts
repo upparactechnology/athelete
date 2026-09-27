@@ -186,8 +186,7 @@ export class AdminService {
   }
 
   // 6. Approve or Reject KYC Document
-  public static async updateKycDocumentStatus(docId: string, status: string, rejectionNote?: string) {
-    const doc = await prisma.partnerDocument.findUnique({
+  public static async updateKycDocumentStatus(docId: string, status: string, rejectionNote?: string) {    const doc = await prisma.partnerDocument.findUnique({
       where: { doc_id: docId }
     });
 
@@ -244,6 +243,16 @@ export class AdminService {
     }
 
     return updatedDoc;
+  }
+
+  /** Resolve a private KYC file path for admin-only download. Null when unavailable. */
+  public static async resolveKycDocumentFile(docId: string): Promise<string | null> {
+    const doc = await prisma.partnerDocument.findUnique({ where: { doc_id: docId } });
+    if (!doc) throw new NotFoundError("Document not found");
+    const ref = doc.file_url || '';
+    if (!ref.startsWith('private:')) return null;
+    const { resolvePrivateFile } = await import('../../middleware/upload.js');
+    return resolvePrivateFile(ref.slice('private:'.length));
   }
 
   // 7. Venues Management
@@ -939,7 +948,8 @@ export class AdminService {
       awsRegion: "",
       googleDriveClientId: "",
       googleDriveClientSecret: "",
-      googleDriveFolderId: ""
+      googleDriveFolderId: "",
+      razorpayWebhookSecret: ""
     };
     if (!data) {
       return defaults;
@@ -949,7 +959,9 @@ export class AdminService {
 
   public static async saveSettings(settings: any) {
     await redis.set('system_settings', JSON.stringify(settings));
-    WebSocketService.broadcast('settings', settings);
+    // Never broadcast secrets to WebSocket clients: only a public subset.
+    const { smtpPass, awsSecretAccessKey, razorpayKeySecret, googleDriveClientSecret, firebaseServiceAccount, ...publicSettings } = settings || {};
+    WebSocketService.broadcast('settings', publicSettings);
     return settings;
   }
 

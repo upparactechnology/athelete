@@ -19,7 +19,11 @@ export function errorHandler(
     message = err.message;
     details = err.details;
   } else if (err instanceof Error) {
-    message = err.message;
+    // Never leak internal error text (SQL, Prisma internals, paths, secrets)
+    // to API consumers. Full details stay in server logs below.
+    logger.error(`${req.method} ${req.path} - Unhandled error: ${err.message}`, {
+      stack: err.stack,
+    });
   }
 
   logger.error(`${req.method} ${req.path} - Error: ${message}`, {

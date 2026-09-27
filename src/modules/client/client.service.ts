@@ -1,18 +1,66 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
+import { randomInt } from 'node:crypto';
 import { prisma } from '../../config/prisma.js';
 import { env } from '../../config/env.js';
 import { redis } from '../../config/redis.js';
-import { ValidationError, NotFoundError } from '../../shared/utils/errors.js';
+import { ValidationError, NotFoundError, ForbiddenError, ConflictError, UnauthorizedError } from '../../shared/utils/errors.js';
 import { WebSocketService } from '../../shared/services/websocket.js';
 import { AdminService } from '../admin/admin.service.js';
 import { sendPushNotification } from '../../config/fcm.js';
+import {
+  RAZORPAY_CURRENCY,
+  isMockPaymentsAllowed,
+  isMockOrderId,
+  isMockPaymentId,
+  paiseToRupees,
+  toPaise,
+  verifyRazorpayPaymentSignature,
+  verifyRazorpayWebhookSignature,
+} from '../../shared/utils/razorpay.js';
+import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
+
+const OTP_RESEND_COOLDOWN_KEY = (phone: string) => `otp:cooldown:${phone}`;
+const BOOKING_PAYMENT_GUARD_KEY = (paymentId: string) => `processed_booking_payment:${paymentId}`;
+const WEBHOOK_EVENT_GUARD_KEY = (eventId: string) => `processed_webhook_event:${eventId}`;
+
+/** Razorpay credentials: explicit env first, Redis system_settings fallback. */
+async function resolveRazorpayKeys(): Promise<{ keyId: string; keySecret: string }> {
+  if (env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
+    return { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET };
+  }
+  const settings = await AdminService.getSettings();
+  return {
+    keyId: settings.razorpayKeyId || '',
+    keySecret: settings.razorpayKeySecret || '',
+  };
+}
+
+function razorpayBasicAuth(keyId: string, keySecret: string): string {
+  return Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+}
+
+async function fetchRazorpayPayment(paymentId: string, keyId: string, keySecret: string): Promise<any> {
+  const response = await fetch(`https://api.razorpay.com/v1/payments/${paymentId}`, {
+    headers: { Authorization: `Basic ${razorpayBasicAuth(keyId, keySecret)}` },
+  });
+  return response.json();
+}
 
 export class ClientService {
   // 1. Auth Service
   public static async requestOtp(phoneNumber: string, password?: string, isSignUp?: boolean, role: string = 'partner') {
     const settings = await AdminService.getSettings();
+
+    if (!phoneNumber || typeof phoneNumber !== 'string') {
+      throw new ValidationError("Phone number is required");
+    }
+    // Resend cooldown: one OTP per phone per cooldown window.
+    const cooldown = await redis.get(OTP_RESEND_COOLDOWN_KEY(phoneNumber));
+    if (cooldown) {
+      throw new ValidationError("An OTP was sent recently. Please wait before requesting another.");
+    }
 
     if (role === 'partner') {
       // 1. Check if partner exists
@@ -34,7 +82,7 @@ export class ClientService {
         }
         const partnerObj = partner as any;
         if (partnerObj.password_hash) {
-          const isPasswordCorrect = bcrypt.compareSync(password, partnerObj.password_hash);
+          const isPasswordCorrect = await bcrypt.compare(password, partnerObj.password_hash);
           if (!isPasswordCorrect) {
             throw new ValidationError("Invalid email/phone or password");
           }
@@ -51,7 +99,7 @@ export class ClientService {
         const newPartnerData: any = {
           phone_number: phoneNumber,
           email: phoneNumber.includes('@') ? phoneNumber : null,
-          password_hash: bcrypt.hashSync(password, 10),
+          password_hash: await bcrypt.hash(password, 10),
           kyc_status: 'unverified', // Start as unverified by default
           total_earnings: 0.0
         };
@@ -80,7 +128,7 @@ export class ClientService {
         }
         const userObj = user as any;
         if (userObj.password_hash) {
-          const isPasswordCorrect = bcrypt.compareSync(password, userObj.password_hash);
+          const isPasswordCorrect = await bcrypt.compare(password, userObj.password_hash);
           if (!isPasswordCorrect) {
             throw new ValidationError("Invalid email/phone or password");
           }
@@ -97,7 +145,7 @@ export class ClientService {
         const newUserData: any = {
           phone_number: phoneNumber,
           email: phoneNumber.includes('@') ? phoneNumber : null,
-          password_hash: bcrypt.hashSync(password, 10),
+          password_hash: await bcrypt.hash(password, 10),
           status: 'Active',
           total_bookings: 0,
           total_spend: 0.0
@@ -109,8 +157,8 @@ export class ClientService {
       }
     }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const hash = bcrypt.hashSync(code, 10);
+    const code = randomInt(100000, 1000000).toString();
+    const hash = await bcrypt.hash(code, 10);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     await prisma.otpLog.create({
@@ -121,6 +169,18 @@ export class ClientService {
         attempt_count: 0
       }
     });
+
+    // Resend cooldown marker (route-level rate limiting also applies).
+    await redis.set(OTP_RESEND_COOLDOWN_KEY(phoneNumber), '1', {
+      EX: env.OTP_RESEND_COOLDOWN_SECONDS,
+    });
+
+    // The real OTP is NEVER returned or logged in production. Dev echoes
+    // require OTP_DEV_MODE=true and are refused when NODE_ENV=production.
+    const devOtpEcho =
+      process.env.OTP_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production'
+        ? { otp: code }
+        : {};
 
     if (settings.useSmtpForOtp && settings.smtpHost) {
       let email = phoneNumber;
@@ -159,20 +219,35 @@ export class ClientService {
           </div>`
         });
 
-        return { message: `OTP sent to email: ${email}`, otp: code };
+        return { message: `OTP sent to email: ${email}`, ...devOtpEcho };
       } catch (mailErr: any) {
-        console.error("Failed to send OTP email, falling back to simulation:", mailErr);
-        return { 
-          message: `Failed to send email (${mailErr.message}). Fallback OTP is: ${code}`, 
-          otp: code 
-        };
+        // Never leak the OTP in error/fallback responses.
+        throw new ValidationError("Failed to send OTP. Please try again later.");
       }
     }
 
-    return { message: `Simulated SMS: OTP for ${phoneNumber} is ${code}`, otp: code };
+    if (process.env.NODE_ENV === 'production') {
+      return { message: `OTP sent to ${phoneNumber}` };
+    }
+    return { message: `Simulated SMS: OTP for ${phoneNumber} issued`, ...devOtpEcho };
   }
 
-  public static async googleLogin(email: string, name: string, role: string) {
+  /**
+   * Google Sign-In (P0): the mobile app MUST send the Google ID token.
+   * Identity is derived ONLY from the verified token — never from
+   * client-supplied email/name — and the role can only be user|partner.
+   */
+  public static async googleLogin(idToken: string, requestedRole?: string) {
+    if (!idToken || typeof idToken !== 'string') {
+      throw new ValidationError("Google ID token is required");
+    }
+    const role = normalizeAuthRole(requestedRole, 'user');
+    const profile = await verifyGoogleIdToken(idToken);
+    if (!profile.emailVerified) {
+      throw new UnauthorizedError("Google account email is not verified");
+    }
+    const email = profile.email;
+    const name = profile.name;
     let id = "";
     if (role === 'partner') {
       let partner = await prisma.partner.findFirst({ where: { email } });
@@ -203,6 +278,15 @@ export class ClientService {
         });
       }
       id = user.user_id;
+      // Link the Google identity so future logins resolve to this account.
+      const existingLink = await prisma.oAuthIdentity.findFirst({
+        where: { user_id: id, provider: 'google', provider_user_id: profile.sub },
+      });
+      if (!existingLink) {
+        await prisma.oAuthIdentity.create({
+          data: { user_id: id, provider: 'google', provider_user_id: profile.sub },
+        });
+      }
     }
 
     const payload = { sub: id, role, status: "Active" };
@@ -213,7 +297,7 @@ export class ClientService {
       data: {
         user_id: id,
         role,
-        token_hash: bcrypt.hashSync(refreshToken, 10),
+        token_hash: await bcrypt.hash(refreshToken, 10),
         expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
       }
     });
@@ -221,20 +305,44 @@ export class ClientService {
     return { accessToken, refreshToken };
   }
 
+  /**
+   * OTP verification (P0): no backdoors, hashed comparison, expiry,
+   * single-use (all codes for the phone are invalidated on success),
+   * and a maximum number of attempts before a fresh code is required.
+   */
   public static async verifyOtp(phoneNumber: string, otp: string, role: string) {
-    if (otp !== "123456") {
-      const otpLog = await prisma.otpLog.findFirst({
-        where: { phone_number: phoneNumber, expires_at: { gte: new Date() } },
-        orderBy: { expires_at: 'desc' }
-      });
-      if (!otpLog || !bcrypt.compareSync(otp, otpLog.otp_hash)) {
-        throw new ValidationError("Invalid or expired OTP");
-      }
+    if (!phoneNumber || !otp) {
+      throw new ValidationError("Phone number and OTP are required");
     }
+    const safeRole = normalizeAuthRole(role, 'user');
+
+    const otpLog = await prisma.otpLog.findFirst({
+      where: { phone_number: phoneNumber, expires_at: { gte: new Date() } },
+      orderBy: { expires_at: 'desc' }
+    });
+    if (!otpLog) {
+      // Generic message avoids account/code enumeration.
+      throw new ValidationError("Invalid or expired OTP");
+    }
+    if (otpLog.attempt_count >= env.OTP_MAX_ATTEMPTS) {
+      await prisma.otpLog.deleteMany({ where: { phone_number: phoneNumber } });
+      throw new ValidationError("Too many incorrect attempts. Please request a new OTP.");
+    }
+    const matches = await bcrypt.compare(otp, otpLog.otp_hash);
+    if (!matches) {
+      await prisma.otpLog.update({
+        where: { otp_id: otpLog.otp_id },
+        data: { attempt_count: { increment: 1 } }
+      });
+      throw new ValidationError("Invalid or expired OTP");
+    }
+
+    // Single-use: invalidate every outstanding code for this phone number.
+    await prisma.otpLog.deleteMany({ where: { phone_number: phoneNumber } });
 
     let id = "";
     let name = "";
-    if (role === 'partner') {
+    if (safeRole === 'partner') {
       let partner = await prisma.partner.findFirst({
         where: {
           OR: [
@@ -280,7 +388,7 @@ export class ClientService {
       name = user.name || "Athlete User";
     }
 
-    const payload = { sub: id, role, status: "Active" };
+    const payload = { sub: id, role: safeRole, status: "Active" };
     const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: '1d' });
     const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
@@ -288,8 +396,8 @@ export class ClientService {
     await prisma.refreshToken.create({
       data: {
         user_id: id,
-        role,
-        token_hash: bcrypt.hashSync(refreshToken, 10),
+        role: safeRole,
+        token_hash: await bcrypt.hash(refreshToken, 10),
         expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
       }
     });
@@ -301,7 +409,7 @@ export class ClientService {
         id,
         phone_number: phoneNumber,
         name,
-        role
+        role: safeRole
       }
     };
   }
@@ -366,7 +474,7 @@ export class ClientService {
       if (data.state !== undefined) updateData.state = data.state;
       if (data.avatar_url !== undefined) updateData.avatar_url = data.avatar_url;
       if (data.password !== undefined && data.password !== null && data.password.trim() !== '') {
-        updateData.password_hash = bcrypt.hashSync(data.password, 10);
+        updateData.password_hash = await bcrypt.hash(data.password, 10);
       }
       return prisma.user.update({
         where: { user_id: id },
@@ -507,20 +615,32 @@ export class ClientService {
   }
 
   // 5. Bookings & Payments
+  /**
+   * Atomic slot reservation (P0): the slot is marked `booked` ONLY if it is
+   * still `available`, in a single UPDATE. Concurrent requests for the same
+   * slot: exactly one wins, the rest get HTTP 409. PostgreSQL is the
+   * correctness guarantee (Redis may be used as an optimization elsewhere).
+   */
   public static async createBooking(userId: string, venueId: string, slotId: string, paymentMode: string, couponCode?: string) {
-    const slot = await prisma.slot.findUnique({
-      where: { slot_id: slotId },
-      include: { venue: true }
-    });
+    if (!slotId || !venueId) throw new ValidationError("Venue and slot are required");
 
-    if (!slot) throw new NotFoundError("Slot not found");
-    if (slot.status !== 'available') throw new ValidationError("Slot is already booked or blocked");
-
-    // Lock the slot immediately
-    await prisma.slot.update({
-      where: { slot_id: slotId },
+    const reserve = await prisma.slot.updateMany({
+      where: { slot_id: slotId, status: 'available' },
       data: { status: 'booked' }
     });
+    if (reserve.count === 0) {
+      throw new ConflictError("Slot is already booked or blocked", "SLOT_UNAVAILABLE");
+    }
+
+    try {
+      const slot = await prisma.slot.findUnique({
+        where: { slot_id: slotId },
+        include: { venue: true }
+      });
+      if (!slot) throw new NotFoundError("Slot not found");
+      if (slot.venue_id !== venueId) {
+        throw new ValidationError("Slot does not belong to the selected venue");
+      }
 
     let discount = 0.0;
     if (couponCode) {
@@ -557,24 +677,35 @@ export class ClientService {
       venueAmount = 0.0;
     }
 
-    const eticketCode = `APV-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+    const eticketCode = `APV-${Date.now().toString(36).toUpperCase()}-${randomInt(100000, 1000000)}`;
 
-    const booking = await prisma.booking.create({
-      data: {
-        user_id: userId,
-        venue_id: venueId,
-        slot_id: slotId,
-        status: paymentMode === 'free' ? 'CONFIRMED' : 'PENDING',
-        payment_mode: paymentMode,
-        eticket_code: eticketCode,
-        convenience_fee: convenienceFee,
-        commission_amount: commissionAmount,
-        gst_amount: gstAmount,
-        partner_amount: partnerAmount,
-        online_amount: onlineAmount,
-        venue_amount: venueAmount
-      }
-    });
+    let booking;
+    try {
+      booking = await prisma.booking.create({
+        data: {
+          user_id: userId,
+          venue_id: venueId,
+          slot_id: slotId,
+          status: paymentMode === 'free' ? 'CONFIRMED' : 'PENDING',
+          payment_mode: paymentMode,
+          eticket_code: eticketCode,
+          convenience_fee: convenienceFee,
+          commission_amount: commissionAmount,
+          gst_amount: gstAmount,
+          partner_amount: partnerAmount,
+          online_amount: onlineAmount,
+          venue_amount: venueAmount
+        }
+      });
+    } catch (err) {
+      // Booking row failed: release the reservation so the slot is not
+      // permanently blocked by a failed/abandoned request.
+      await prisma.slot.updateMany({
+        where: { slot_id: slotId, status: 'booked' },
+        data: { status: 'available' }
+      });
+      throw err;
+    }
 
     WebSocketService.broadcast('bookings', booking);
     const slotObj = await prisma.slot.findUnique({ where: { slot_id: slotId } });
@@ -583,42 +714,101 @@ export class ClientService {
     }
 
     return booking;
+    } catch (err) {
+      // Any failure after the atomic reservation must not leave the slot
+      // stuck as booked without a booking row (validation errors etc.).
+      // A successful booking returns above, so reaching here means no booking.
+      if (err instanceof NotFoundError || err instanceof ValidationError) {
+        await prisma.slot.updateMany({
+          where: { slot_id: slotId, status: 'booked' },
+          data: { status: 'available' }
+        });
+      }
+      throw err;
+    }
   }
 
-  public static async initiatePayment(bookingId: string) {
+  /**
+   * Payment order creation (P0): amount comes from the server-side booking
+   * row, never the client. Existing pending orders are reused so retries do
+   * not create duplicate transactions. No mock fallback in production.
+   */
+  public static async initiatePayment(bookingId: string, userId: string) {
     const booking = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
     if (!booking) throw new NotFoundError("Booking not found");
+    if (booking.user_id !== userId) throw new ForbiddenError("You do not own this booking");
+    if (booking.status === 'CONFIRMED') {
+      const confirmed = await prisma.transaction.findFirst({
+        where: { booking_id: bookingId, txn_status: 'success' },
+        orderBy: { created_at: 'desc' },
+      });
+      return {
+        orderId: confirmed?.razorpay_order_id,
+        amount: booking.online_amount,
+        currency: RAZORPAY_CURRENCY,
+        alreadyPaid: true,
+      };
+    }
 
-    const settings = await AdminService.getSettings();
-    let orderId = `order_${Math.floor(10000000 + Math.random() * 90000000)}`;
+    const pending = await prisma.transaction.findFirst({
+      where: { booking_id: bookingId, txn_status: 'pending' },
+      orderBy: { created_at: 'desc' },
+    });
+    if (pending) {
+      const { keyId } = await resolveRazorpayKeys();
+      const settings = await AdminService.getSettings();
+      return {
+        orderId: pending.razorpay_order_id,
+        amount: booking.online_amount,
+        currency: RAZORPAY_CURRENCY,
+        key: keyId || settings.razorpayKeyId,
+      };
+    }
 
-    if (settings.razorpayKeyId && settings.razorpayKeySecret) {
-      try {
-        const auth = Buffer.from(`${settings.razorpayKeyId}:${settings.razorpayKeySecret}`).toString('base64');
-        const amountInPaise = Math.round(Number(booking.online_amount) * 100);
-
-        const response = await fetch('https://api.razorpay.com/v1/orders', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Basic ${auth}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            amount: amountInPaise,
-            currency: 'INR',
-            receipt: bookingId
-          })
-        });
-
-        const rzpOrder: any = await response.json();
-        if (rzpOrder.id) {
-          orderId = rzpOrder.id;
-        } else {
-          console.error("Razorpay order generation response did not contain id:", rzpOrder);
-        }
-      } catch (err) {
-        console.error("Failed to generate Razorpay order, falling back to mock ID:", err);
+    const { keyId, keySecret } = await resolveRazorpayKeys();
+    if (!keyId || !keySecret) {
+      if (!isMockPaymentsAllowed()) {
+        throw new ValidationError("Payment gateway is not configured. Please try again later.");
       }
+      const orderId = `order_mock_${Date.now()}_${randomInt(100000, 1000000)}`;
+      await prisma.transaction.create({
+        data: {
+          booking_id: bookingId,
+          razorpay_order_id: orderId,
+          txn_type: "capture",
+          txn_status: "pending",
+          amount: booking.online_amount
+        }
+      });
+      return { orderId, amount: booking.online_amount, currency: RAZORPAY_CURRENCY, mock: true };
+    }
+
+    let orderId: string;
+    try {
+      const amountInPaise = toPaise(Number(booking.online_amount));
+      const response = await fetch('https://api.razorpay.com/v1/orders', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${razorpayBasicAuth(keyId, keySecret)}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          amount: amountInPaise,
+          currency: RAZORPAY_CURRENCY,
+          receipt: bookingId
+        })
+      });
+      const rzpOrder: any = await response.json();
+      if (!rzpOrder || !rzpOrder.id) {
+        throw new ValidationError("Payment gateway did not return an order. Please try again.");
+      }
+      if (Number(rzpOrder.amount) !== amountInPaise) {
+        throw new ValidationError("Payment gateway order amount mismatch. Please try again.");
+      }
+      orderId = rzpOrder.id;
+    } catch (err: any) {
+      if (err instanceof ValidationError || err instanceof NotFoundError || err instanceof ForbiddenError) throw err;
+      throw new ValidationError("Failed to create payment order. Please try again.");
     }
 
     await prisma.transaction.create({
@@ -631,98 +821,236 @@ export class ClientService {
       }
     });
 
-    return { orderId, amount: booking.online_amount, currency: "INR", key: settings.razorpayKeyId };
+    return { orderId, amount: booking.online_amount, currency: RAZORPAY_CURRENCY, key: keyId };
   }
 
-  public static async verifyPayment(bookingId: string, razorpayOrderId: string, razorpayPaymentId: string) {
+  /**
+   * Payment verification (P0): the client is NEVER trusted.
+   * Requires the Razorpay signature (HMAC-SHA256 order|payment), verifies the
+   * payment object server-side (order binding, captured status, exact server
+   * amount, currency, user binding), rejects reused payment IDs, and applies
+   * all state changes atomically. Repeat calls are idempotent.
+   */
+  public static async verifyPayment(
+    bookingId: string,
+    userId: string,
+    razorpayOrderId: string,
+    razorpayPaymentId: string,
+    razorpaySignature?: string
+  ) {
+    if (!bookingId || !razorpayOrderId || !razorpayPaymentId) {
+      throw new ValidationError("Booking, order and payment identifiers are required");
+    }
     const txn = await prisma.transaction.findFirst({
       where: { booking_id: bookingId, razorpay_order_id: razorpayOrderId }
     });
-
     if (!txn) throw new NotFoundError("Transaction record not found");
 
-    const settings = await AdminService.getSettings();
-    if (settings.razorpayKeyId && settings.razorpayKeySecret && !razorpayPaymentId.startsWith("pay_mock_") && !razorpayPaymentId.startsWith("pay_")) {
-      try {
-        const auth = Buffer.from(`${settings.razorpayKeyId}:${settings.razorpayKeySecret}`).toString('base64');
-        const response = await fetch(`https://api.razorpay.com/v1/payments/${razorpayPaymentId}`, {
-          headers: {
-            'Authorization': `Basic ${auth}`
-          }
-        });
-        const paymentDetails: any = await response.json();
+    const bookingRow = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
+    if (!bookingRow) throw new NotFoundError("Booking not found");
+    if (bookingRow.user_id !== userId) throw new ForbiddenError("You do not own this booking");
 
-        if (paymentDetails.order_id !== razorpayOrderId) {
-          throw new ValidationError("Payment order ID mismatch");
+    // Idempotency: already confirmed / already processed.
+    if (txn.txn_status === 'success' || bookingRow.status === 'CONFIRMED') {
+      const current = await prisma.booking.findUnique({
+        where: { booking_id: bookingId },
+        include: { user: true, venue: { include: { partner: true } }, slot: true },
+      });
+      return { ...current, alreadyProcessed: true };
+    }
+    const paymentGuard = await redis.set(BOOKING_PAYMENT_GUARD_KEY(razorpayPaymentId), bookingId, { NX: true, EX: 86400 * 30 });
+    if (paymentGuard === null) {
+      throw new ConflictError("This payment has already been processed", "PAYMENT_REUSED");
+    }
+
+    try {
+      const mockOrder = isMockOrderId(razorpayOrderId);
+      const mockPayment = isMockPaymentId(razorpayPaymentId);
+      if (mockOrder || mockPayment) {
+        // Simulated payments: explicit dev-only opt-in, never in production.
+        if (!isMockPaymentsAllowed()) {
+          throw new ValidationError("Payment verification failed");
+        }
+      } else {
+        const { keySecret } = await resolveRazorpayKeys();
+        if (!keySecret) throw new ValidationError("Payment gateway is not configured");
+        if (!razorpaySignature || !verifyRazorpayPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature, keySecret)) {
+          throw new ValidationError("Payment signature verification failed");
+        }
+        const { keyId } = await resolveRazorpayKeys();
+        let paymentDetails: any;
+        try {
+          paymentDetails = await fetchRazorpayPayment(razorpayPaymentId, keyId, keySecret);
+        } catch (_) {
+          throw new ValidationError("Could not verify payment with the gateway. Please try again.");
+        }
+        if (!paymentDetails || paymentDetails.order_id !== razorpayOrderId) {
+          throw new ValidationError("Payment is not linked to this booking's order");
         }
         if (paymentDetails.status !== 'captured' && paymentDetails.status !== 'authorized') {
-          throw new ValidationError(`Payment is not successful (status: ${paymentDetails.status})`);
+          throw new ValidationError("Payment is not successful");
         }
-      } catch (err: any) {
-        console.error("Razorpay verification failed:", err);
-        throw new ValidationError(err.message || "Razorpay payment verification failed");
+        if (String(paymentDetails.currency || '').toUpperCase() !== RAZORPAY_CURRENCY) {
+          throw new ValidationError("Payment currency mismatch");
+        }
+        const expectedPaise = toPaise(Number(bookingRow.online_amount));
+        if (Number(paymentDetails.amount) !== expectedPaise) {
+          throw new ValidationError("Payment amount does not match the booking amount");
+        }
+        // One Razorpay payment must never confirm two bookings.
+        const reused = await prisma.transaction.findFirst({
+          where: {
+            razorpay_payment_id: razorpayPaymentId,
+            txn_status: 'success',
+            booking_id: { not: bookingId },
+          },
+        });
+        if (reused) {
+          throw new ConflictError("This payment has already been used for another booking", "PAYMENT_REUSED");
+        }
       }
-    }
 
-    await prisma.transaction.update({
-      where: { txn_id: txn.txn_id },
-      data: {
-        razorpay_payment_id: razorpayPaymentId,
-        txn_status: "success"
-      }
-    });
-
-    const booking = await prisma.booking.update({
-      where: { booking_id: bookingId },
-      data: { status: "CONFIRMED" },
-      include: {
-        user: true,
-        venue: {
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: razorpayPaymentId, txn_status: "success" }
+        });
+        const booking = await tx.booking.update({
+          where: { booking_id: bookingId },
+          data: { status: "CONFIRMED" },
           include: {
-            partner: true
+            user: true,
+            venue: { include: { partner: true } },
+            slot: true
           }
-        },
-        slot: true
+        });
+        const updatedUser = await tx.user.update({
+          where: { user_id: booking.user_id },
+          data: {
+            total_bookings: { increment: 1 },
+            total_spend: { increment: booking.online_amount }
+          }
+        });
+        return { booking, updatedUser };
+      });
+
+      // Process Rewards & Milestones (non-fatal).
+      try {
+        await ClientService.processRewardsAndMilestones(result.updatedUser, result.booking);
+      } catch (err) {
+        console.error("Error processing rewards/milestones:", err);
       }
-    });
 
-    // Send FCM Notifications
-    if (booking.user.fcm_token) {
-      const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
-      sendPushNotification(
-        booking.user.fcm_token,
-        "Booking Confirmed!",
-        `Your booking at ${booking.venue.name} for slot ${slotTime} is confirmed.`
-      ).catch(e => console.error("FCM error notifying user of confirmed booking:", e));
-    }
-    if (booking.venue.partner.fcm_token) {
-      const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
-      sendPushNotification(
-        booking.venue.partner.fcm_token,
-        "New Booking Received!",
-        `${booking.user.name || 'An athlete'} has booked slot ${slotTime} at ${booking.venue.name}.`
-      ).catch(e => console.error("FCM error notifying partner of new booking:", e));
-    }
-
-    // Update user stats
-    const updatedUser = await prisma.user.update({
-      where: { user_id: booking.user_id },
-      data: {
-        total_bookings: { increment: 1 },
-        total_spend: { increment: booking.online_amount }
+      const { booking } = result;
+      // Send FCM Notifications
+      if (booking.user.fcm_token) {
+        const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
+        sendPushNotification(
+          booking.user.fcm_token,
+          "Booking Confirmed!",
+          `Your booking at ${booking.venue.name} for slot ${slotTime} is confirmed.`
+        ).catch(e => console.error("FCM error notifying user of confirmed booking:", e));
       }
-    });
+      if (booking.venue.partner.fcm_token) {
+        const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
+        sendPushNotification(
+          booking.venue.partner.fcm_token,
+          "New Booking Received!",
+          `${booking.user.name || 'An athlete'} has booked slot ${slotTime} at ${booking.venue.name}.`
+        ).catch(e => console.error("FCM error notifying partner of new booking:", e));
+      }
 
-    // Process Rewards & Milestones
-    await ClientService.processRewardsAndMilestones(updatedUser, booking);
+      WebSocketService.broadcast('bookings', booking);
+      const slot = await prisma.slot.findUnique({ where: { slot_id: booking.slot_id } });
+      if (slot) {
+        WebSocketService.broadcast('slots', [slot]);
+      }
 
-    WebSocketService.broadcast('bookings', booking);
-    const slot = await prisma.slot.findUnique({ where: { slot_id: booking.slot_id } });
-    if (slot) {
-      WebSocketService.broadcast('slots', [slot]);
+      return booking;
+    } catch (err) {
+      // Release the idempotency guard on genuine verification failures so a
+      // legitimate retry with a NEW payment can proceed. Confirmed bookings
+      // never reach here (returned above).
+      if (err instanceof ValidationError) {
+        await redis.del(BOOKING_PAYMENT_GUARD_KEY(razorpayPaymentId));
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Razorpay webhook (P0): signature verified over the RAW body, processing
+   * idempotent per event/payment/order. Handles payment.captured (confirms
+   * the booking even if the app was closed) and payment.failed (marks txn).
+   */
+  public static async handleRazorpayWebhook(rawBody: Buffer, signature: string | undefined) {
+    const webhookSecret = env.RAZORPAY_WEBHOOK_SECRET || (await AdminService.getSettings()).razorpayWebhookSecret;
+    if (!webhookSecret) {
+      return { ignored: true, reason: 'webhook-secret-not-configured' };
+    }
+    if (!verifyRazorpayWebhookSignature(rawBody, signature, webhookSecret)) {
+      throw new ValidationError("Invalid webhook signature");
+    }
+    let event: any;
+    try {
+      event = JSON.parse(rawBody.toString('utf8'));
+    } catch (_) {
+      throw new ValidationError("Invalid webhook payload");
+    }
+    const eventId: string | undefined = event?.id;
+    const type: string | undefined = event?.event;
+    const payment = event?.payload?.payment?.entity;
+    const orderId: string | undefined = payment?.order_id;
+    const paymentId: string | undefined = payment?.id;
+    if (!type || !orderId || !paymentId) {
+      return { ignored: true, reason: 'unsupported-event' };
     }
 
-    return booking;
+    const guardKey = eventId ? WEBHOOK_EVENT_GUARD_KEY(eventId) : BOOKING_PAYMENT_GUARD_KEY(paymentId);
+    const first = await redis.set(guardKey, type, { NX: true, EX: 86400 * 30 });
+    if (first === null) {
+      return { duplicate: true, event: type };
+    }
+
+    const txn = await prisma.transaction.findFirst({ where: { razorpay_order_id: orderId } });
+    if (!txn) {
+      return { ignored: true, reason: 'unknown-order' };
+    }
+    if (type === 'payment.captured' || type === 'payment.authorized') {
+      if (txn.txn_status === 'success') return { duplicate: true, event: type };
+      await prisma.$transaction([
+        prisma.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: paymentId, txn_status: 'success' },
+        }),
+        prisma.booking.update({ where: { booking_id: txn.booking_id }, data: { status: 'CONFIRMED' } }),
+      ]);
+      const booking = await prisma.booking.findUnique({
+        where: { booking_id: txn.booking_id },
+        include: { user: true, venue: { include: { partner: true } }, slot: true },
+      });
+      if (booking) {
+        await prisma.user.update({
+          where: { user_id: booking.user_id },
+          data: {
+            total_bookings: { increment: 1 },
+            total_spend: { increment: booking.online_amount },
+          },
+        }).catch((e) => console.error('Webhook user-stats update failed:', e));
+        WebSocketService.broadcast('bookings', booking);
+      }
+      return { processed: true, event: type, bookingId: txn.booking_id };
+    }
+    if (type === 'payment.failed') {
+      if (txn.txn_status !== 'success') {
+        await prisma.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: paymentId, txn_status: 'failed' },
+        });
+      }
+      return { processed: true, event: type, bookingId: txn.booking_id };
+    }
+    return { ignored: true, reason: 'unsupported-event' };
   }
 
   public static async getBookings(userId: string) {
@@ -870,7 +1198,12 @@ export class ClientService {
     });
   }
 
-  public static async readNotification(notifId: string) {
+  public static async readNotification(notifId: string, recipientId?: string) {
+    const notif = await prisma.userNotification.findUnique({ where: { notif_id: notifId } });
+    if (!notif) throw new NotFoundError("Notification not found");
+    if (recipientId && notif.recipient_id !== recipientId) {
+      throw new ForbiddenError("You cannot modify another user's notification");
+    }
     return prisma.userNotification.update({
       where: { notif_id: notifId },
       data: { is_read: true }
@@ -902,6 +1235,28 @@ export class ClientService {
   }
 
   // Partner Services
+  /**
+   * Ownership guard (P0): every partner operation on a venue-scoped resource
+   * must prove the venue belongs to the authenticated partner.
+   */
+  private static async assertPartnerVenue(partnerId: string, venueId: string) {
+    const venue = await prisma.venue.findFirst({
+      where: { venue_id: venueId, partner_id: partnerId }
+    });
+    if (!venue) throw new NotFoundError("Venue not found or unauthorized");
+    return venue;
+  }
+
+  private static async assertPartnerSlotOwner(partnerId: string, slotId: string) {
+    const slot = await prisma.slot.findUnique({
+      where: { slot_id: slotId },
+      include: { venue: true },
+    });
+    if (!slot || slot.venue.partner_id !== partnerId) {
+      throw new NotFoundError("Slot not found or unauthorized");
+    }
+    return slot;
+  }
   public static async getPartnerVenues(partnerId: string) {
     return prisma.venue.findMany({
       where: { partner_id: partnerId },
@@ -959,8 +1314,10 @@ export class ClientService {
     });
   }
 
-  public static async getPartnerVenueSlots(venueId: string, dateStr: string) {
+  public static async getPartnerVenueSlots(venueId: string, dateStr: string, partnerId?: string) {
+    if (partnerId) await ClientService.assertPartnerVenue(partnerId, venueId);
     const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) throw new ValidationError("Invalid date");
     return prisma.slot.findMany({
       where: {
         venue_id: venueId,
@@ -970,7 +1327,17 @@ export class ClientService {
     });
   }
 
-  public static async bulkGenerateSlots(venueId: string, dates: string[], startTime: string, endTime: string, price: number, durationMinutes: number) {
+  public static async bulkGenerateSlots(venueId: string, dates: string[], startTime: string, endTime: string, price: number, durationMinutes: number, partnerId?: string) {
+    if (partnerId) await ClientService.assertPartnerVenue(partnerId, venueId);
+    if (!Array.isArray(dates) || dates.length === 0 || dates.length > 62) {
+      throw new ValidationError("Provide 1-62 dates for slot generation");
+    }
+    if (!Number.isFinite(Number(price)) || Number(price) < 0) {
+      throw new ValidationError("Invalid slot price");
+    }
+    if (!Number.isFinite(Number(durationMinutes)) || Number(durationMinutes) < 15 || Number(durationMinutes) > 480) {
+      throw new ValidationError("Invalid slot duration");
+    }
     const created = [];
 
     for (const dateStr of dates) {
@@ -1017,8 +1384,13 @@ export class ClientService {
           }
         });
         if (!existing) {
-          const s = await prisma.slot.create({ data });
-          created.push(s);
+          try {
+            const s = await prisma.slot.create({ data });
+            created.push(s);
+          } catch (err: any) {
+            // Unique-violation race between concurrent generators: skip.
+            if (err?.code !== 'P2002') throw err;
+          }
         }
       }
     }
@@ -1027,7 +1399,11 @@ export class ClientService {
     return created;
   }
 
-  public static async bulkDeleteSlots(venueId: string, slotIds: string[]) {
+  public static async bulkDeleteSlots(venueId: string, slotIds: string[], partnerId?: string) {
+    if (partnerId) await ClientService.assertPartnerVenue(partnerId, venueId);
+    if (!Array.isArray(slotIds) || slotIds.length === 0) {
+      throw new ValidationError("No slots selected");
+    }
     const res = await prisma.slot.deleteMany({
       where: {
         slot_id: { in: slotIds },
@@ -1039,9 +1415,15 @@ export class ClientService {
     return res;
   }
 
-  public static async toggleSlotBlock(slotId: string) {
-    const slot = await prisma.slot.findUnique({ where: { slot_id: slotId } });
+  public static async toggleSlotBlock(slotId: string, partnerId?: string) {
+    const slot = partnerId
+      ? await ClientService.assertPartnerSlotOwner(partnerId, slotId)
+      : await prisma.slot.findUnique({ where: { slot_id: slotId } });
     if (!slot) throw new NotFoundError("Slot not found");
+    // A booked slot backs a real booking: blocking must never destroy it.
+    if (slot.status === 'booked') {
+      throw new ConflictError("Booked slots cannot be blocked. Cancel the booking first.", "SLOT_BOOKED");
+    }
 
     const newStatus = slot.status === 'blocked_by_partner' ? 'available' : 'blocked_by_partner';
     const updated = await prisma.slot.update({
@@ -1069,7 +1451,7 @@ export class ClientService {
     });
   }
 
-  public static async checkinBooking(bookingId: string) {
+  public static async checkinBooking(bookingId: string, partnerId?: string) {
     const booking = await prisma.booking.findUnique({
       where: { booking_id: bookingId },
       include: {
@@ -1078,6 +1460,9 @@ export class ClientService {
       }
     });
     if (!booking) throw new NotFoundError("Booking not found");
+    if (partnerId && booking.venue.partner_id !== partnerId) {
+      throw new ForbiddenError("You cannot check in bookings for another partner's venue");
+    }
 
     const updated = await prisma.booking.update({
       where: { booking_id: bookingId },
@@ -1118,7 +1503,18 @@ export class ClientService {
     });
   }
 
-  public static async createPartnerDispute(bookingId: string, details: string) {
+  public static async createPartnerDispute(bookingId: string, details: string, partnerId?: string) {
+    if (!details || !details.trim()) throw new ValidationError("Dispute details are required");
+    if (partnerId) {
+      const booking = await prisma.booking.findUnique({
+        where: { booking_id: bookingId },
+        include: { venue: true },
+      });
+      if (!booking) throw new NotFoundError("Booking not found");
+      if (booking.venue.partner_id !== partnerId) {
+        throw new ForbiddenError("You cannot raise disputes on another partner's bookings");
+      }
+    }
     return prisma.dispute.create({
       data: {
         booking_id: bookingId,
@@ -1151,9 +1547,16 @@ export class ClientService {
     });
   }
 
-  public static async replyToReview(reviewId: string, reply: string) {
-    const review = await prisma.venueReview.findUnique({ where: { review_id: reviewId } });
+  public static async replyToReview(reviewId: string, reply: string, partnerId?: string) {
+    if (!reply || !reply.trim()) throw new ValidationError("Reply text is required");
+    const review = await prisma.venueReview.findUnique({
+      where: { review_id: reviewId },
+      include: { venue: true },
+    });
     if (!review) throw new NotFoundError("Review not found");
+    if (partnerId && review.venue.partner_id !== partnerId) {
+      throw new ForbiddenError("You cannot reply to reviews for another partner's venue");
+    }
 
     return prisma.venueReview.update({
       where: { review_id: reviewId },
@@ -1161,7 +1564,24 @@ export class ClientService {
     });
   }
 
+  private static readonly KYC_DOCUMENT_TYPES = new Set([
+    'gst_certificate',
+    'pan_card',
+    'ownership_proof',
+    'cancelled_cheque',
+    'bank_statement',
+  ]);
+
   public static async submitPartnerKyc(partnerId: string, documentType: string, fileUrl: string, gstNumber?: string, panNumber?: string, aadhaarNumber?: string) {
+    if (!documentType || !ClientService.KYC_DOCUMENT_TYPES.has(documentType)) {
+      throw new ValidationError("Invalid document type");
+    }
+    // KYC files must be private refs issued by our upload endpoint
+    // (private:<random-filename>). Arbitrary external URLs are rejected so
+    // sensitive documents cannot be spoofed or linked off-platform.
+    if (!fileUrl || !/^private:[A-Za-z0-9._-]+$/.test(fileUrl)) {
+      throw new ValidationError("KYC document must be uploaded through the secure document upload first");
+    }
     // Update partner's details first if provided
     if (documentType === 'gst_certificate' && gstNumber) {
       await prisma.partner.update({
@@ -1203,13 +1623,16 @@ export class ClientService {
     });
   }
 
-  public static async sendChatMessage(userId: string, recipientId: string, text: string) {
+  public static async sendChatMessage(userId: string, recipientId: string, text: string, senderRole: 'user' | 'partner' | 'admin' = 'user') {
+    if (!recipientId || !text || !text.trim()) throw new ValidationError("Recipient and message text are required");
+    if (text.length > 2000) throw new ValidationError("Message is too long");
+    if (recipientId === userId) throw new ValidationError("Cannot send a message to yourself");
     const msg = await prisma.chatMessage.create({
       data: {
         sender_id: userId,
-        sender_role: 'user',
+        sender_role: senderRole,
         recipient_id: recipientId,
-        text: text
+        text: text.trim()
       }
     });
 
@@ -1254,7 +1677,9 @@ export class ClientService {
     })();
 
     try {
-      WebSocketService.broadcast('chat', msg);
+      // Private message: deliver only to sender + recipient sockets.
+      WebSocketService.emitToUser(msg.sender_id, 'chat_message', msg);
+      WebSocketService.emitToUser(msg.recipient_id, 'chat_message', msg);
     } catch (_) { }
     return msg;
   }
@@ -1403,72 +1828,101 @@ export class ClientService {
   }
 
   public static async initiateWalletPayment(amount: number) {
-    const settings = await AdminService.getSettings();
-    let orderId = `order_wallet_${Math.floor(10000000 + Math.random() * 90000000)}`;
+    const topUp = Number(amount);
+    if (!Number.isFinite(topUp) || topUp <= 0 || topUp > 100000) {
+      throw new ValidationError("Invalid wallet top-up amount");
+    }
+    const { keyId, keySecret } = await resolveRazorpayKeys();
+    let orderId = `order_wallet_mock_${Date.now()}_${randomInt(100000, 1000000)}`;
 
-    if (settings.razorpayKeyId && settings.razorpayKeySecret) {
+    if (keyId && keySecret) {
       try {
-        const auth = Buffer.from(`${settings.razorpayKeyId}:${settings.razorpayKeySecret}`).toString('base64');
-        const amountInPaise = Math.round(Number(amount) * 100);
+        const amountInPaise = toPaise(topUp);
 
         const response = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: {
-            'Authorization': `Basic ${auth}`,
+            'Authorization': `Basic ${razorpayBasicAuth(keyId, keySecret)}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             amount: amountInPaise,
-            currency: 'INR',
+            currency: RAZORPAY_CURRENCY,
             receipt: `wallet_${Date.now()}`
           })
         });
 
         const rzpOrder: any = await response.json();
-        if (rzpOrder.id) {
-          orderId = rzpOrder.id;
+        if (!rzpOrder || !rzpOrder.id || Number(rzpOrder.amount) !== amountInPaise) {
+          throw new ValidationError("Payment gateway did not return a valid order. Please try again.");
         }
-      } catch (err) {
-        console.error("Failed to generate Razorpay wallet order, falling back to mock ID:", err);
+        orderId = rzpOrder.id;
+      } catch (err: any) {
+        if (err instanceof ValidationError) throw err;
+        throw new ValidationError("Failed to create wallet payment order. Please try again.");
       }
+    } else if (!isMockPaymentsAllowed()) {
+      throw new ValidationError("Payment gateway is not configured. Please try again later.");
     }
 
-    return { orderId, amount, currency: "INR", key: settings.razorpayKeyId };
+    return { orderId, amount: topUp, currency: RAZORPAY_CURRENCY, key: keyId || undefined };
   }
 
-  public static async verifyWalletPayment(userId: string, razorpayOrderId: string, razorpayPaymentId: string, amount: number) {
+  public static async verifyWalletPayment(
+    userId: string,
+    razorpayOrderId: string,
+    razorpayPaymentId: string,
+    amount: number,
+    razorpaySignature?: string
+  ) {
+    if (!razorpayOrderId || !razorpayPaymentId) {
+      throw new ValidationError("Order and payment identifiers are required");
+    }
     const duplicate = await redis.get(`processed_wallet_payment:${razorpayPaymentId}`);
     if (duplicate) {
-      throw new ValidationError("Payment already processed");
+      throw new ConflictError("Payment already processed", "PAYMENT_REUSED");
     }
 
-    const settings = await AdminService.getSettings();
-    let finalAmount = Number(amount);
+    const { keyId, keySecret } = await resolveRazorpayKeys();
+    let finalAmount: number;
 
-    if (settings.razorpayKeyId && settings.razorpayKeySecret && !razorpayPaymentId.startsWith("pay_mock_") && !razorpayPaymentId.startsWith("pay_")) {
-      try {
-        const auth = Buffer.from(`${settings.razorpayKeyId}:${settings.razorpayKeySecret}`).toString('base64');
-        const response = await fetch(`https://api.razorpay.com/v1/payments/${razorpayPaymentId}`, {
-          headers: {
-            'Authorization': `Basic ${auth}`
-          }
-        });
-        const paymentDetails: any = await response.json();
-
-        if (paymentDetails.order_id !== razorpayOrderId) {
-          throw new ValidationError("Payment order ID mismatch");
-        }
-        if (paymentDetails.status !== 'captured' && paymentDetails.status !== 'authorized') {
-          throw new ValidationError(`Payment is not successful (status: ${paymentDetails.status})`);
-        }
-        finalAmount = Number(paymentDetails.amount) / 100;
-      } catch (err: any) {
-        console.error("Razorpay wallet verification failed:", err);
-        throw new ValidationError(err.message || "Razorpay wallet payment verification failed");
+    if (isMockOrderId(razorpayOrderId) || isMockPaymentId(razorpayPaymentId)) {
+      if (!isMockPaymentsAllowed()) {
+        throw new ValidationError("Payment verification failed");
       }
+      finalAmount = Number(amount);
+      if (!Number.isFinite(finalAmount) || finalAmount <= 0 || finalAmount > 100000) {
+        throw new ValidationError("Invalid wallet top-up amount");
+      }
+    } else {
+      if (!keySecret) throw new ValidationError("Payment gateway is not configured");
+      if (!razorpaySignature || !verifyRazorpayPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature, keySecret)) {
+        throw new ValidationError("Payment signature verification failed");
+      }
+      let paymentDetails: any;
+      try {
+        paymentDetails = await fetchRazorpayPayment(razorpayPaymentId, keyId, keySecret);
+      } catch (_) {
+        throw new ValidationError("Could not verify payment with the gateway. Please try again.");
+      }
+      if (!paymentDetails || paymentDetails.order_id !== razorpayOrderId) {
+        throw new ValidationError("Payment is not linked to this order");
+      }
+      if (paymentDetails.status !== 'captured' && paymentDetails.status !== 'authorized') {
+        throw new ValidationError("Payment is not successful");
+      }
+      if (String(paymentDetails.currency || '').toUpperCase() !== RAZORPAY_CURRENCY) {
+        throw new ValidationError("Payment currency mismatch");
+      }
+      // Server truth: credit exactly what the gateway captured, never the
+      // client-supplied amount.
+      finalAmount = paiseToRupees(Number(paymentDetails.amount));
     }
 
-    await redis.set(`processed_wallet_payment:${razorpayPaymentId}`, 'true', { EX: 86400 * 30 });
+    const claimed = await redis.set(`processed_wallet_payment:${razorpayPaymentId}`, userId, { NX: true, EX: 86400 * 30 });
+    if (claimed === null) {
+      throw new ConflictError("Payment already processed", "PAYMENT_REUSED");
+    }
 
     const updatedUser = await prisma.user.update({
       where: { user_id: userId },

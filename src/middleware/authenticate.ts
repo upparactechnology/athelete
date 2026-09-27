@@ -25,6 +25,9 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       if (!user) {
         return next(new UnauthorizedError("User profile no longer exists. Please log in again."));
       }
+      if (user.status && user.status !== 'Active') {
+        return next(new UnauthorizedError("This account is no longer active. Please contact support."));
+      }
     } else if (payload.role === 'partner') {
       const partner = await prisma.partner.findUnique({ where: { partner_id: payload.sub } });
       if (!partner) {

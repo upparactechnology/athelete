@@ -14,13 +14,8 @@ export function authorize(...allowedRoles: UserRole[]) {
       return next(new ForbiddenError("You do not have permission to access this resource"));
     }
 
-    if (role === "admin") {
-      const adminHeader = req.headers["x-admin-role"];
-      if (adminHeader !== "admin") {
-        return next(new ForbiddenError("Admin access requires matching X-Admin-Role header"));
-      }
-    }
-
+    // The JWT role is the authority. No client-controlled header may grant
+    // or escalate privileges (previously X-Admin-Role was trusted).
     next();
   };
 }

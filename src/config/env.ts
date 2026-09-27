@@ -12,6 +12,21 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD_HASH: z.string(),
   ALLOWED_ORIGINS: z.string().default('*'),
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Google Sign-In (verified server-side; never trust client-supplied email)
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_IDS: z.string().optional(), // comma-separated additional audiences
+  // OTP behaviour. OTP_DEV_MODE=true returns the OTP in the API response for
+  // local development ONLY and is rejected when NODE_ENV=production.
+  OTP_DEV_MODE: z.enum(['true', 'false']).default('false'),
+  OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().default(60),
+  OTP_MAX_ATTEMPTS: z.coerce.number().default(5),
+  // Razorpay. Env values take precedence over Redis system_settings.
+  RAZORPAY_KEY_ID: z.string().optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  // Explicit opt-in for simulated payments. NEVER enabled in production.
+  ALLOW_MOCK_PAYMENTS: z.enum(['true', 'false']).default('false'),
 });
 
 const parsed = envSchema.safeParse(process.env);
