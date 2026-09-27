@@ -3,7 +3,7 @@ import { redis } from '../../config/redis.js';
 import { env } from '../../config/env.js';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js';
 import { computeRefundQuote } from '../utils/bookingLifecycle.js';
-import { isMockPaymentsAllowed, paiseToRupees, toPaise } from '../utils/razorpay.js';
+import { isMockPaymentsAllowed, toPaise } from '../utils/razorpay.js';
 import { notifyUser } from './notifications.js';
 
 const REFUND_GUARD_KEY = (bookingId: string) => `refund:request:${bookingId}`;
@@ -24,11 +24,16 @@ function basicAuth(keyId: string, keySecret: string): string {
   return Buffer.from(`${keyId}:${keySecret}`).toString('base64');
 }
 
-async function gatewayFetch(url: string, keyId: string, keySecret: string, init?: RequestInit): Promise<any> {
+type FetchImpl = (url: string, init?: RequestInit) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
+
+async function gatewayFetch(
+  url: string, keyId: string, keySecret: string, init?: RequestInit,
+  fetchImpl: FetchImpl = fetch as unknown as FetchImpl
+): Promise<any> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       ...init,
       headers: {
         Authorization: `Basic ${basicAuth(keyId, keySecret)}`,
@@ -37,21 +42,138 @@ async function gatewayFetch(url: string, keyId: string, keySecret: string, init?
       },
       signal: controller.signal,
     });
-    return await response.json();
+    return { ok: response.ok, status: response.status, body: await response.json() };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** List gateway refunds for a payment (recovery path). Returns [] on failure. */
-async function listGatewayRefunds(paymentId: string, keyId: string, keySecret: string): Promise<any[]> {
+export type GatewayLookupState = 'found' | 'not_found' | 'unknown';
+
+export interface GatewayRefundLookup {
+  state: GatewayLookupState;
+  items: any[];
+  reason?: string;
+}
+
+/**
+ * Explicit reconciliation states. A lookup FAILURE is NEVER evidence that no
+ * refund exists: timeouts, network errors, non-2xx, auth errors and malformed
+ * bodies all map to 'unknown', which callers must treat as "leave pending".
+ */
+export async function queryGatewayRefunds(
+  paymentId: string, keyId: string, keySecret: string,
+  fetchImpl?: FetchImpl
+): Promise<GatewayRefundLookup> {
+  let res: { ok: boolean; status: number; body: any };
   try {
-    const data = await gatewayFetch(`https://api.razorpay.com/v1/payments/${paymentId}/refunds`, keyId, keySecret);
-    const items = Array.isArray(data?.items) ? data.items : [];
-    return items;
-  } catch {
-    return [];
+    res = await gatewayFetch(
+      `https://api.razorpay.com/v1/payments/${paymentId}/refunds`, keyId, keySecret,
+      undefined, fetchImpl
+    );
+  } catch (err: any) {
+    const reason = err?.name === 'AbortError' ? 'gateway-timeout' : `gateway-error:${err?.message || 'network'}`;
+    return { state: 'unknown', items: [], reason };
   }
+  if (!res.ok) {
+    return { state: 'unknown', items: [], reason: `gateway-http-${res.status}` };
+  }
+  const items = res.body?.items;
+  if (!Array.isArray(items)) {
+    return { state: 'unknown', items: [], reason: 'malformed-gateway-response' };
+  }
+  if (items.length === 0) {
+    return { state: 'not_found', items: [] };
+  }
+  return { state: 'found', items };
+}
+
+/** Gateway refund states this integration recognizes (processed + interim). */
+const RECOGNIZED_REFUND_STATES = new Set(['created', 'pending', 'processed', 'failed']);
+
+/**
+ * Find the gateway refund matching this booking's payment (+ amount, and the
+ * known refund id when we have one). Unrelated refunds never match.
+ */
+export function findMatchingRefund(
+  items: any[],
+  criteria: { paymentId: string; amountPaise: number; refundId?: string | null }
+): any | null {
+  for (const r of items) {
+    if (!r || typeof r !== 'object') continue;
+    if (r.payment_id !== criteria.paymentId) continue;
+    if (!RECOGNIZED_REFUND_STATES.has(String(r.status))) continue;
+    if (criteria.refundId && r.id !== criteria.refundId) continue;
+    if (Number(r.amount) !== Number(criteria.amountPaise)) continue;
+    return r;
+  }
+  return null;
+}
+
+export interface RefundTotals {
+  captured: number;
+  successfulRefundAmount: number;
+  pendingRefundAmount: number;
+  remainingRefundableAmount: number;
+  requestedAmount: number;
+}
+
+/**
+ * Server-side refund accounting. Partial refunds accumulate; concurrent
+ * pending intents reserve their amounts; the total can never exceed capture.
+ * Pure + unit tested.
+ */
+export function computeRefundTotals(
+  capturedAmount: number,
+  successAmounts: number[],
+  pendingAmounts: number[],
+  quotedAmount: number
+): RefundTotals {
+  const round2 = (n: number) => Math.max(0, Number(Number(n).toFixed(2)));
+  const successfulRefundAmount = round2(successAmounts.reduce((s, a) => s + Number(a || 0), 0));
+  const pendingRefundAmount = round2(pendingAmounts.reduce((s, a) => s + Number(a || 0), 0));
+  const remainingRefundableAmount = round2(Number(capturedAmount) - successfulRefundAmount - pendingRefundAmount);
+  const requestedAmount = Math.min(round2(quotedAmount), remainingRefundableAmount);
+  return { captured: round2(capturedAmount), successfulRefundAmount, pendingRefundAmount, remainingRefundableAmount, requestedAmount };
+}
+
+export type StaleRecoveryDecision =
+  | { action: 'adopt'; refundId: string; status: 'processed' | 'pending' | 'created' }
+  | { action: 'supersede' }
+  | { action: 'wait'; reason: string };
+
+/**
+ * Pure decision for a stale pending intent given a gateway lookup result.
+ * 'unknown' (timeout/500/malformed) ALWAYS waits — never fails the row,
+ * never triggers a fresh gateway call. Unit tested.
+ */
+export function decideStaleRecovery(
+  lookup: GatewayRefundLookup,
+  pending: { amount: number; razorpay_payment_id?: string | null },
+  criteria: { paymentId: string; amountPaise: number }
+): StaleRecoveryDecision {
+  if (lookup.state === 'unknown') {
+    return { action: 'wait', reason: lookup.reason || 'gateway-unknown' };
+  }
+  if (lookup.state === 'not_found') {
+    return { action: 'supersede' };
+  }
+  const match = findMatchingRefund(lookup.items, {
+    paymentId: criteria.paymentId,
+    amountPaise: criteria.amountPaise,
+    refundId: pending.razorpay_payment_id ?? undefined,
+  });
+  if (!match) {
+    return { action: 'supersede' };
+  }
+  if (match.status === 'processed') {
+    return { action: 'adopt', refundId: String(match.id), status: 'processed' };
+  }
+  if (match.status === 'pending' || match.status === 'created') {
+    return { action: 'wait', reason: 'gateway-still-processing' };
+  }
+  // Gateway-side failure: safe to supersede and retry fresh.
+  return { action: 'supersede' };
 }
 
 export interface RefundRequest {
@@ -71,6 +193,7 @@ export interface RefundOutcome {
   eligibility: string;
   gateway: 'razorpay' | 'mock';
   status: 'initiated' | 'succeeded' | 'in_flight' | 'duplicate';
+  reason?: string;
 }
 
 /**
@@ -81,11 +204,10 @@ export interface RefundOutcome {
  *
  * Correctness is database-held, never Redis-held:
  * - A partial unique index allows exactly ONE pending refund intent per
- *   booking (migration 20260928+; see PENDING_INTENT_DDL note below), so
- *   concurrent requests converge even across restarts/instances.
- * - Stale pending intents (crash between gateway success and DB write) are
- *   recovered by reconciling against the gateway refund list before any new
- *   gateway call, so a retry never double-refunds.
+ *   booking, so concurrent requests converge even across restarts/instances.
+ * - Stale pending intents are reconciled against an EXPLICIT gateway lookup
+ *   state machine (found / not_found / unknown). 'unknown' never fails the
+ *   row and never triggers a fresh gateway call.
  * - Redis remains a best-effort single-flight optimization only.
  * - Razorpay exposes no idempotency key for refund creation in this API
  *   contract, so none is invented; the pending-intent + reconcile design is
@@ -115,14 +237,6 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
     throw new ValidationError('No refundable payment for this booking');
   }
 
-  const done = await prisma.transaction.findFirst({
-    where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
-    orderBy: { created_at: 'desc' },
-  });
-  if (done) {
-    return { duplicate: true, refundTxn: done, amount: Number(done.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate' };
-  }
-
   const quote = computeRefundQuote(
     booking.online_amount, booking.convenience_fee,
     (booking.slot as any)?.date, (booking.slot as any)?.start_time, now
@@ -131,47 +245,61 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
     throw new ValidationError(`Refund not eligible (${quote.eligibility})`);
   }
 
-  const refundedRows = await prisma.transaction.findMany({
-    where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
-    select: { amount: true },
-  });
-  const alreadyRefunded = refundedRows.reduce((s, r) => s + Number(r.amount), 0);
-  const remaining = Number(booking.online_amount) - alreadyRefunded;
-  const amount = Math.min(Number(quote.amount.toFixed(2)), Math.max(0, remaining));
-  if (amount <= 0) {
-    throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
-  }
-
   // Serialize the decision phase in Postgres so concurrent requests (even
   // across instances / Redis outages) share one outcome. $queryRaw
   // parameterizes the booking id (never interpolate request input into SQL).
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('refund:' || ${req.bookingId}))`;
 
-    const successRow = await tx.transaction.findFirst({
-      where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
-    });
-    if (successRow) {
-      return { duplicate: true, refundTxn: successRow, amount: Number(successRow.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate' } as RefundOutcome;
+    // Totals INSIDE the lock: pending intents reserve their amounts, so two
+    // concurrent partial refunds can never collectively exceed capture.
+    const [successRows, pendingRows] = await Promise.all([
+      tx.transaction.findMany({
+        where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
+        select: { amount: true },
+      }),
+      tx.transaction.findMany({
+        where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'pending' },
+        select: { txn_id: true, amount: true, created_at: true, razorpay_payment_id: true },
+      }),
+    ]);
+    const totals = computeRefundTotals(
+      Number(booking.online_amount),
+      successRows.map((r) => Number(r.amount)),
+      pendingRows.map((r) => Number(r.amount)),
+      Number(quote.amount.toFixed(2))
+    );
+    if (totals.remainingRefundableAmount <= 0) {
+      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
+    }
+    if (totals.requestedAmount <= 0) {
+      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
+    }
+    const amount = totals.requestedAmount;
+
+    const freshPending = pendingRows.filter(
+      (r: any) => now.getTime() - new Date(r.created_at).getTime() < PENDING_STALE_MS
+    );
+    if (freshPending.length > 0) {
+      const row = freshPending.sort(
+        (a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0];
+      return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
     }
 
-    const pendingRow = await tx.transaction.findFirst({
-      where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'pending' },
-      orderBy: { created_at: 'desc' },
-    });
-    if (pendingRow) {
-      const ageMs = now.getTime() - new Date(pendingRow.created_at).getTime();
-      if (ageMs < PENDING_STALE_MS) {
-        return { duplicate: true, inFlight: true, refundTxn: pendingRow, amount: Number(pendingRow.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight' } as RefundOutcome;
-      }
-      // Stale intent: reconcile against the gateway BEFORE any new call.
-      const reconciled = await reconcileStalePending(tx as any, pendingRow, paymentId, mockPayment);
-      if (reconciled) return reconciled;
+    const stalePending = pendingRows
+      .filter((r: any) => now.getTime() - new Date(r.created_at).getTime() >= PENDING_STALE_MS)
+      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] as any;
+    if (stalePending) {
+      // Reconcile BEFORE any new gateway call. 'unknown' returns in-flight
+      // WITHOUT failing the row and WITHOUT a fresh call (see helper).
+      const recovered = await reconcileStalePending(tx as any, stalePending, paymentId, mockPayment, quote.eligibility);
+      if (recovered) return recovered;
     }
 
     // Durable intent first; gateway call happens after commit (see below).
     // Exactly one pending intent per booking is enforced by the partial
-    // unique index (PENDING_INTENT_DDL); losers get P2002 and converge.
+    // unique index; losers get P2002 and converge on the winner.
     let intent: any;
     try {
       intent = await tx.transaction.create({
@@ -193,7 +321,7 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
         if (winner?.txn_status === 'success') {
           return { duplicate: true, refundTxn: winner, amount: Number(winner.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate' } as RefundOutcome;
         }
-        return { duplicate: true, inFlight: true, refundTxn: winner, amount: Number(winner?.amount ?? amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight' } as RefundOutcome;
+        return { duplicate: true, inFlight: true, refundTxn: winner, amount: Number(winner?.amount ?? amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
       }
       throw err;
     }
@@ -207,45 +335,65 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
 }
 
 /**
- * Reconcile a stale pending intent against the gateway refund list.
- * Returns an outcome when the stale row resolves the request, or null when
- * the caller may proceed to create a fresh intent.
+ * Reconcile a stale pending intent. Returns an outcome when the stale row
+ * resolves the request, or null when the caller may proceed to a fresh
+ * intent. Gateway uncertainty ('unknown') NEVER fails the row.
  */
 async function reconcileStalePending(
-  tx: any, pendingRow: any, paymentId: string, mockPayment: boolean
+  tx: any, pendingRow: any, paymentId: string, mockPayment: boolean, eligibility: string
 ): Promise<RefundOutcome | null> {
   if (mockPayment) {
-    // Mock gateway has no list API: a stale mock intent can never have
-    // succeeded externally; supersede it and allow a fresh attempt.
+    // Mock gateway has no list API and can never have succeeded externally;
+    // supersede deterministically (no lookup to misinterpret).
     await tx.transaction.update({ where: { txn_id: pendingRow.txn_id }, data: { txn_status: 'failed' } });
     return null;
   }
   const { keyId, keySecret } = await resolveRazorpayKeys().catch(() => ({ keyId: '', keySecret: '' }));
-  if (!keyId || !keySecret) return null; // cannot reconcile; leave for retry
-  const items = await listGatewayRefunds(paymentId, keyId, keySecret);
-  const match = items.find(
-    (r: any) => r?.status === 'processed' && paiseToRupees(Number(r.amount)) === Number(pendingRow.amount)
+  if (!keyId || !keySecret) return null; // cannot reconcile; leave pending for retry
+  const lookup = await queryGatewayRefunds(paymentId, keyId, keySecret);
+  const decision = decideStaleRecovery(
+    lookup, pendingRow,
+    { paymentId, amountPaise: toPaise(Number(pendingRow.amount)) }
   );
-  if (match?.id) {
+  if (decision.action === 'wait') {
+    return {
+      duplicate: true, inFlight: true, refundTxn: pendingRow,
+      amount: Number(pendingRow.amount), eligibility, gateway: 'razorpay',
+      status: 'in_flight', reason: decision.reason,
+    };
+  }
+  if (decision.action === 'adopt') {
     const adopted = await tx.transaction.update({
       where: { txn_id: pendingRow.txn_id },
-      data: { razorpay_payment_id: String(match.id), txn_status: 'success' },
+      data: { razorpay_payment_id: decision.refundId, txn_status: 'success' },
     });
     return { duplicate: true, refundTxn: adopted, amount: Number(adopted.amount), eligibility: 'RECONCILED', gateway: 'razorpay', status: 'duplicate' };
   }
-  // A gateway-side failure (or no trace at all) means this intent never
-  // moved money: mark it failed so a fresh attempt starts clean.
-  await tx.transaction.update({
-    where: { txn_id: pendingRow.txn_id },
+  // 'supersede': the stale intent provably moved no money — fail it so a
+  // fresh attempt starts clean. Conditional on still-pending (a concurrent
+  // webhook may have finalized it; then converge on the winner instead).
+  const superseded = await tx.transaction.updateMany({
+    where: { txn_id: pendingRow.txn_id, txn_status: 'pending' },
     data: { txn_status: 'failed' },
   });
+  if (superseded.count === 0) {
+    const winner = await tx.transaction.findFirst({
+      where: { booking_id: pendingRow.booking_id, txn_type: 'refund', txn_status: { in: ['pending', 'success'] } },
+      orderBy: { created_at: 'desc' },
+    });
+    if (winner?.txn_status === 'success') {
+      return { duplicate: true, refundTxn: winner, amount: Number(winner.amount), eligibility: 'ALREADY_REFUNDED', gateway: 'razorpay', status: 'duplicate' };
+    }
+    return { duplicate: true, inFlight: true, refundTxn: winner ?? pendingRow, amount: Number(winner?.amount ?? pendingRow.amount), eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' };
+  }
   return null;
 }
 
 /**
  * Drive a committed pending intent: gateway call, then conditional
  * pending->success/failed transition. Network/timeout failures leave the
- * intent pending for retry/reconciliation (never silent).
+ * intent pending for retry/reconciliation (never silent, never failed
+ * without evidence).
  */
 async function driveRefundIntent(
   intent: any, amount: number, paymentId: string, mockPayment: boolean,
@@ -280,18 +428,29 @@ async function driveRefundIntent(
         );
       } catch (err: any) {
         const timeout = err?.name === 'AbortError';
+        // Leave pending: retry/reconciliation will resolve truthfully.
         throw new ValidationError(
           timeout
             ? 'Refund gateway timed out; the request is recorded and will be reconciled on retry'
             : 'Refund gateway request failed; please retry'
         );
       }
-      if (!rzpRefund || !rzpRefund.id) {
-        await prisma.transaction.updateMany({
-          where: { txn_id: intent.txn_id, txn_status: 'pending' },
-          data: { txn_status: 'failed' },
-        });
-        throw new ValidationError('Refund rejected by gateway; please retry or contact support');
+      // gatewayFetch resolves transport; inspect the payload explicitly.
+      if (!rzpRefund || typeof rzpRefund !== 'object') {
+        throw new ValidationError('Refund gateway returned an unreadable response; request recorded, please retry');
+      }
+      if (!rzpRefund.id) {
+        const gatewayError = rzpRefund?.error?.description || rzpRefund?.error?.code;
+        // Explicit gateway rejection (validation/auth/business rule): failed.
+        // Anything else (no id, no error shape): leave pending for reconcile.
+        if (gatewayError) {
+          await prisma.transaction.updateMany({
+            where: { txn_id: intent.txn_id, txn_status: 'pending' },
+            data: { txn_status: 'failed' },
+          });
+          throw new ValidationError(`Refund rejected by gateway (${gatewayError}); please retry or contact support`);
+        }
+        throw new ValidationError('Refund gateway returned no refund ID; request recorded, please retry');
       }
       refundId = String(rzpRefund.id);
     }
@@ -302,9 +461,7 @@ async function driveRefundIntent(
       where: { txn_id: intent.txn_id, txn_status: 'pending' },
       data: { razorpay_payment_id: refundId, txn_status: 'success' },
     });
-    const refundTxn = claimed.count === 1
-      ? await prisma.transaction.findUnique({ where: { txn_id: intent.txn_id } })
-      : await prisma.transaction.findUnique({ where: { txn_id: intent.txn_id } });
+    const refundTxn = await prisma.transaction.findUnique({ where: { txn_id: intent.txn_id } });
 
     await notifyUser(
       booking.user_id, 'refund',
@@ -321,7 +478,7 @@ async function driveRefundIntent(
 
 /**
  * P2-3 refund webhook events with strict transition rules:
- * - processed: pending -> success only (amount must match when provided).
+ * - processed: pending -> success only (refund/payment/amount binding).
  * - failed: pending -> failed only.
  * - success rows are immutable; unknown ids fabricate nothing.
  */
@@ -335,10 +492,21 @@ export async function applyRefundWebhookEvent(event: {
   const txn = await db.transaction.findFirst({
     where: { razorpay_payment_id: event.refundId, txn_type: 'refund' },
   });
-  if (event.type === 'refund.processed') {
+  if (event.type === 'refund.processed' || event.type === 'refund.failed') {
     if (!txn) return { processed: false, reason: 'unknown-refund' };
+    // Payment binding: the refund must belong to the booking's capture.
+    if (event.paymentId) {
+      const capture = await db.transaction.findFirst({
+        where: { booking_id: (txn as any).booking_id, txn_type: 'capture', txn_status: 'success' },
+      });
+      if (!capture || capture.razorpay_payment_id !== event.paymentId) {
+        return { processed: false, reason: 'payment-mismatch' };
+      }
+    }
     if (txn.txn_status === 'success') return { processed: true, reason: 'duplicate' };
     if (txn.txn_status !== 'pending') return { processed: true, reason: 'terminal-state-kept' };
+  }
+  if (event.type === 'refund.processed') {
     if (event.amountPaise != null && Number(event.amountPaise) !== toPaise(Number(txn.amount))) {
       return { processed: false, reason: 'amount-mismatch' };
     }
@@ -349,9 +517,6 @@ export async function applyRefundWebhookEvent(event: {
     return { processed: moved.count === 1, reason: moved.count === 1 ? 'confirmed' : 'duplicate' };
   }
   if (event.type === 'refund.failed') {
-    if (!txn) return { processed: false, reason: 'unknown-refund' };
-    if (txn.txn_status === 'success') return { processed: true, reason: 'duplicate' };
-    if (txn.txn_status !== 'pending') return { processed: true, reason: 'terminal-state-kept' };
     const moved = await db.transaction.updateMany({
       where: { txn_id: txn.txn_id, txn_status: 'pending' },
       data: { txn_status: 'failed' },

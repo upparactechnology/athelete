@@ -39,7 +39,7 @@ import {
 } from '../../shared/utils/bookingLifecycle.js';
 import { notifyPartner, notifyUser } from '../../shared/services/notifications.js';
 import { requestBookingRefund } from '../../shared/services/refunds.js';
-import { rollbackCouponForBooking } from '../../shared/services/coupons.js';
+import { claimCouponUsage, rollbackCouponForBooking } from '../../shared/services/coupons.js';
 import { createSession, refreshSession, revokeAllSessions, revokeSession } from '../../shared/utils/sessions.js';
 import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
 
@@ -707,12 +707,11 @@ export class ClientService {
         throw new ValidationError("Slot does not belong to the selected venue");
       }
 
-    let discount = 0.0;
     let appliedCoupon: any = null;
     const now = new Date();
     if (couponCode) {
-      // P2-4: full server-side validation (active, window, min order).
-      // Usage is claimed atomically with booking creation below.
+      // P2-4: fast-fail validation; the authoritative locked check happens
+      // inside the booking transaction via claimCouponUsage.
       const coupon = await prisma.coupon.findUnique({ where: { code: couponCode } });
       if (!coupon || !coupon.is_active) throw new ValidationError("Coupon is not active");
       if (new Date(coupon.valid_from) > now || new Date(coupon.valid_until) < now) {
@@ -722,32 +721,9 @@ export class ClientService {
         throw new ValidationError("Coupon minimum order value not met");
       }
       appliedCoupon = coupon;
-      discount = computeCouponDiscount(
-        { discount_type: coupon.discount_type, discount_value: Number(coupon.discount_value), max_discount: coupon.max_discount != null ? Number(coupon.max_discount) : null },
-        Number(slot.price)
-      );
     }
 
-    const price = Number(slot.price);
-    const bookingPrice = Math.max(0, price - discount);
-
-    // Platform revenue calculations
-    const convenienceFee = Number((bookingPrice * 0.04).toFixed(2));
-    const commissionAmount = Number((bookingPrice * 0.03).toFixed(2));
-    const gstAmount = Number((commissionAmount * 0.18).toFixed(2));
-    const partnerAmount = Number((bookingPrice - commissionAmount).toFixed(2));
-
-    let onlineAmount = 0.0;
-    let venueAmount = 0.0;
-
-    if (paymentMode === 'pay_at_venue') {
-      onlineAmount = Number((bookingPrice * 0.30 + convenienceFee + gstAmount).toFixed(2));
-      venueAmount = Number((bookingPrice * 0.70).toFixed(2));
-    } else {
-      onlineAmount = Number((bookingPrice + convenienceFee + gstAmount).toFixed(2));
-      venueAmount = 0.0;
-    }
-
+    const slotPrice = Number(slot.price);
     const eticketCode = `APV-${Date.now().toString(36).toUpperCase()}-${randomInt(100000, 1000000)}`;
     const bookingStatus = paymentMode === 'free' ? BOOKING_STATUS.CONFIRMED : BOOKING_STATUS.PENDING;
     // P2-1: server-side payment deadline for unpaid bookings.
@@ -757,31 +733,42 @@ export class ClientService {
 
     let booking;
     try {
-      // P2-4: booking + coupon claim commit atomically. The conditional
-      // increment is the exact global-usage guard; the redemption row plus
-      // unique constraint blocks duplicate use for the same booking.
+      // P2-4: coupon claim + pricing + booking + redemption commit atomically.
+      // Pricing is derived INSIDE the transaction from the row-locked coupon
+      // so the charged amounts always match the claimed coupon state.
       booking = await prisma.$transaction(async (tx) => {
+        let txDiscount = 0.0;
         if (appliedCoupon) {
-          const claimed = await tx.coupon.updateMany({
-            where: {
-              coupon_id: appliedCoupon.coupon_id,
-              is_active: true,
-              valid_from: { lte: now },
-              valid_until: { gte: now },
-              used_count: { lt: appliedCoupon.usage_limit },
-            },
-            data: { used_count: { increment: 1 } },
+          // Row-locked claim (global + per-user limits race-safe).
+          const { coupon: freshCoupon } = await claimCouponUsage(tx, {
+            couponId: appliedCoupon.coupon_id,
+            userId,
+            now,
           });
-          if (claimed.count === 0) {
-            throw new ConflictError("Coupon usage limit reached", "COUPON_EXHAUSTED");
-          }
-          const priorUses = await tx.couponRedemption.count({
-            where: { coupon_id: appliedCoupon.coupon_id, user_id: userId, status: 'applied' },
-          });
-          if (priorUses >= (appliedCoupon.per_user_limit ?? 1)) {
-            throw new ConflictError("Coupon per-user limit reached", "COUPON_USER_LIMIT");
-          }
+          appliedCoupon = freshCoupon;
+          txDiscount = computeCouponDiscount(
+            { discount_type: freshCoupon.discount_type, discount_value: Number(freshCoupon.discount_value), max_discount: freshCoupon.max_discount != null ? Number(freshCoupon.max_discount) : null },
+            slotPrice
+          );
         }
+
+        const bookingPrice = Math.max(0, slotPrice - txDiscount);
+        // Platform revenue calculations (unchanged formulas).
+        const convenienceFee = Number((bookingPrice * 0.04).toFixed(2));
+        const commissionAmount = Number((bookingPrice * 0.03).toFixed(2));
+        const gstAmount = Number((commissionAmount * 0.18).toFixed(2));
+        const partnerAmount = Number((bookingPrice - commissionAmount).toFixed(2));
+
+        let onlineAmount = 0.0;
+        let venueAmount = 0.0;
+        if (paymentMode === 'pay_at_venue') {
+          onlineAmount = Number((bookingPrice * 0.30 + convenienceFee + gstAmount).toFixed(2));
+          venueAmount = Number((bookingPrice * 0.70).toFixed(2));
+        } else {
+          onlineAmount = Number((bookingPrice + convenienceFee + gstAmount).toFixed(2));
+          venueAmount = 0.0;
+        }
+
         const created = await tx.booking.create({
           data: {
             booking_id: randomUUID(),
@@ -800,14 +787,14 @@ export class ClientService {
             expires_at: expiresAt,
           }
         });
-        if (appliedCoupon && discount > 0) {
+        if (appliedCoupon && txDiscount > 0) {
           try {
             await tx.couponRedemption.create({
               data: {
                 coupon_id: appliedCoupon.coupon_id,
                 user_id: userId,
                 booking_id: created.booking_id,
-                discount_amount: discount,
+                discount_amount: txDiscount,
                 status: 'applied',
               },
             });
