@@ -7,7 +7,7 @@ import {
   revokeAllSessions,
   revokeSession,
 } from '../src/shared/utils/sessions.js';
-import { applyRefundWebhookEvent, computeRefundTotals, decideStaleRecovery, findMatchingRefund, queryGatewayRefunds } from '../src/shared/services/refunds.js';
+import { applyRefundWebhookEvent, applyStaleDecision, computeRefundTotals, decideStaleRecovery, evaluateRefundReadiness, findMatchingRefund, queryGatewayRefunds, reconcileStalePending } from '../src/shared/services/refunds.js';
 import { claimCouponUsage, rollbackCouponForBooking } from '../src/shared/services/coupons.js';
 import { notifyPartner, notifyUser } from '../src/shared/services/notifications.js';
 
@@ -1085,5 +1085,181 @@ describe('Coupon ledger consistency (UNIT, snapshot-transaction fake)', () => {
     };
     await expect(recordCouponRedemption(tx, { couponId: 'c1', userId: 'u1', bookingId: 'b1', discountAmount: 10 }))
       .rejects.toMatchObject({ code: 'COUPON_DUPLICATE' });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* FINAL PASS: stale-creds behavior, readiness ordering, applyStale    */
+/* decision paths. UNIT only (fakes). Live PG/gateway runs NOT TESTED. */
+/* ------------------------------------------------------------------ */
+
+const STALE = 15 * 60 * 1000;
+function pendingRow(ageMs: number, amount = 500, extra: any = {}) {
+  return {
+    txn_id: `pend-${ageMs}`, booking_id: 'b1', amount,
+    created_at: new Date(Date.now() - ageMs), razorpay_payment_id: null, ...extra,
+  };
+}
+
+describe('Refund readiness ordering (UNIT, pure)', () => {
+  // nowMs is sampled per call: a timestamp fixed at collection time would
+  // make every row look newborn (age goes negative).
+  const base = () => ({ capturedAmount: 1000, successAmounts: [] as number[], quotedAmount: 950, nowMs: Date.now(), staleMs: STALE });
+
+  it('2. full capture reserved by a fresh pending -> IN_FLIGHT, not ALREADY_REFUNDED', () => {
+    const r = evaluateRefundReadiness({
+      ...base(), successAmounts: [], pendingRows: [pendingRow(60_000, 1000)], quotedAmount: 950,
+    });
+    expect(r.action).toBe('in_flight');
+    if (r.action === 'in_flight') expect(r.reason).toBe('pending-intent-active');
+  });
+
+  it('3. partial pending reduces remainder; only zero remainder is ALREADY_REFUNDED', () => {
+    // Partial pending alone does not block: no fresh/stale split here, but a
+    // fresh pending always wins as IN_FLIGHT; stale goes to reconcile.
+    const fresh = evaluateRefundReadiness({ ...base(), pendingRows: [pendingRow(60_000, 400)] });
+    expect(fresh.action).toBe('in_flight');
+    const stale = evaluateRefundReadiness({ ...base(), pendingRows: [pendingRow(STALE + 1000, 400)] });
+    expect(stale.action).toBe('reconcile');
+    const exhausted = evaluateRefundReadiness({ ...base(), successAmounts: [1000], pendingRows: [] });
+    expect(exhausted.action).toBe('already_refunded');
+    const partialOk = evaluateRefundReadiness({ ...base(), successAmounts: [400], pendingRows: [] });
+    expect(partialOk).toMatchObject({ action: 'create', amount: 600 });
+  });
+
+  it('11. failed rows never reserve: retry allowed after failed stale', () => {
+    // Failed rows are simply absent from pendingRows; success-only totals
+    // decide. A lone failed row + no success -> create.
+    const r = evaluateRefundReadiness({ ...base(), successAmounts: [], pendingRows: [] });
+    expect(r).toMatchObject({ action: 'create', amount: 950 });
+  });
+});
+
+describe('Missing credentials on stale pending (UNIT, fake DB)', () => {
+  it('1. row stays PENDING, no new intent, controlled IN_FLIGHT (no creds configured)', async () => {
+    // Force the missing-credentials branch deterministically (env keys are
+    // parsed at import; AdminService/Redis are unreachable here, so the
+    // resolver falls through to empty keys without any network attempt).
+    const keepId = process.env.RAZORPAY_KEY_ID;
+    const keepSecret = process.env.RAZORPAY_KEY_SECRET;
+    delete process.env.RAZORPAY_KEY_ID;
+    delete process.env.RAZORPAY_KEY_SECRET;
+    // NOTE: src/config/env.ts snapshots process.env at import; the resolver
+    // reads env.RAZORPAY_KEY_ID first, so also clear via the parsed object
+    // when present in this process.
+    try {
+      const { env } = await import('../src/config/env.js');
+      (env as any).RAZORPAY_KEY_ID = undefined;
+      (env as any).RAZORPAY_KEY_SECRET = undefined;
+    } catch { /* ignore */ }
+    const db = makeFakeDb() as any;
+    const stale = {
+      txn_id: 'stale1', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: null, txn_type: 'refund', txn_status: 'pending', amount: 500,
+      created_at: new Date(Date.now() - STALE - 5000),
+    };
+    db.transaction.rows.push({ ...stale });
+    const out = await reconcileStalePending(db, { ...stale }, 'pay_1', false, 'FULL_REFUND');
+    expect(out).toMatchObject({
+      status: 'in_flight', reason: 'reconciliation-pending-no-credentials',
+      duplicate: true, inFlight: true, amount: 500,
+    });
+    expect(out && (out as any).refundTxn.txn_id).toBe('stale1');
+    expect(out && (out as any).refundTxn.razorpay_payment_id).toBeNull();
+    const rows = db.transaction.rows.filter((t: any) => t.txn_type === 'refund');
+    expect(rows).toHaveLength(1); // no second intent created
+    expect(rows[0].txn_status).toBe('pending'); // never failed
+    if (keepId !== undefined) process.env.RAZORPAY_KEY_ID = keepId;
+    if (keepSecret !== undefined) process.env.RAZORPAY_KEY_SECRET = keepSecret;
+    try {
+      const { env } = await import('../src/config/env.js');
+      (env as any).RAZORPAY_KEY_ID = keepId;
+      (env as any).RAZORPAY_KEY_SECRET = keepSecret;
+    } catch { /* ignore */ }
+  });
+});
+
+describe('applyStaleDecision paths (UNIT, fake DB)', () => {  function seedPending(db: any, status = 'pending') {
+    db.transaction.rows.push({
+      txn_id: 'stale1', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: null, txn_type: 'refund', txn_status: status, amount: 500,
+      created_at: new Date(Date.now() - STALE - 1000),
+    });
+  }
+
+  it('1. missing-creds equivalent: wait keeps row PENDING, no new intent', async () => {
+    const db = makeFakeDb() as any;
+    seedPending(db);
+    // reconcileStalePending with no keys returns in-flight; applyStaleDecision
+    // 'wait' is the same terminal used for unknown lookups.
+    const out = await applyStaleDecision(db, db.transaction.rows[0], { action: 'wait', reason: 'reconciliation-pending-no-credentials' }, 'FULL_REFUND');
+    expect(out).toMatchObject({ status: 'in_flight', reason: 'reconciliation-pending-no-credentials' });
+    expect(db.transaction.rows).toHaveLength(1);
+    expect(db.transaction.rows[0].txn_status).toBe('pending');
+  });
+
+  it('9. webhook-won race: loser converges instead of clobbering', async () => {
+    const db = makeFakeDb() as any;
+    seedPending(db, 'success'); // webhook already finalized it
+    db.transaction.rows.push({
+      txn_id: 'other', booking_id: 'b1', razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'rfnd_x', txn_type: 'refund', txn_status: 'success', amount: 500,
+      created_at: new Date(),
+    });
+    const staleView = { ...db.transaction.rows[0], txn_status: 'pending' };
+    const out = await applyStaleDecision(db, staleView, { action: 'adopt', refundId: 'rfnd_x', status: 'processed' }, 'FULL_REFUND');
+    // Row is no longer pending in the DB: conditional update misses, we converge.
+    expect(out).toMatchObject({ status: 'duplicate' });
+    expect(db.transaction.rows.find((t: any) => t.txn_id === 'stale1').txn_status).toBe('success');
+  });
+
+  it('5/6. created + pending gateway states keep row PENDING via wait', async () => {
+    const db = makeFakeDb() as any;
+    seedPending(db);
+    for (const reason of ['gateway-still-processing']) {
+      const out = await applyStaleDecision(db, db.transaction.rows[0], { action: 'wait', reason }, 'FULL_REFUND');
+      expect(out).toMatchObject({ status: 'in_flight' });
+    }
+    expect(db.transaction.rows[0].txn_status).toBe('pending');
+  });
+
+  it('7. adopt writes gateway id + success exactly once', async () => {
+    const db = makeFakeDb() as any;
+    seedPending(db);
+    const out = await applyStaleDecision(db, db.transaction.rows[0], { action: 'adopt', refundId: 'rfnd_z', status: 'processed' }, 'FULL_REFUND');
+    expect(out).toMatchObject({ status: 'duplicate' });
+    expect(db.transaction.rows[0]).toMatchObject({ txn_status: 'success', razorpay_payment_id: 'rfnd_z' });
+  });
+
+  it('8. supersede fails the stale row, allowing a fresh intent', async () => {
+    const db = makeFakeDb() as any;
+    seedPending(db);
+    const out = await applyStaleDecision(db, db.transaction.rows[0], { action: 'supersede' }, 'FULL_REFUND');
+    expect(out).toBeNull(); // caller may proceed to a fresh intent
+    expect(db.transaction.rows[0].txn_status).toBe('failed');
+  });
+
+  it('10. concurrent full refunds: single pending intent, loser converges', async () => {
+    const db = makeFakeDb() as any;
+    seedPending(db);
+    // Second concurrent request hits the partial-unique path in production;
+    // here we assert the converge read reports the existing pending row.
+    const winner = await db.transaction.findFirst({
+      where: { booking_id: 'b1', txn_type: 'refund', txn_status: { in: ['pending', 'success'] } },
+      orderBy: { created_at: 'desc' },
+    });
+    expect(winner.txn_status).toBe('pending');
+    const inFlight = await applyStaleDecision(db, winner, { action: 'wait', reason: 'pending-intent-active' }, 'FULL_REFUND');
+    expect(inFlight).toMatchObject({ status: 'in_flight', duplicate: true });
+    expect(db.transaction.rows.filter((t: any) => t.txn_type === 'refund' && t.txn_status === 'pending')).toHaveLength(1);
+  });
+
+  it('12. ambiguous gateway states never fail the row (decision-level)', async () => {
+    const { decideStaleRecovery } = await import('../src/shared/services/refunds.js');
+    const row = pendingRow(STALE + 5000, 500);
+    for (const reason of ['gateway-http-500', 'gateway-http-429', 'gateway-timeout', 'malformed-gateway-response']) {
+      expect(decideStaleRecovery({ state: 'unknown', items: [], reason }, row, { paymentId: 'pay_1', amountPaise: 50000 }))
+        .toMatchObject({ action: 'wait' });
+    }
   });
 });

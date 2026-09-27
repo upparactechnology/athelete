@@ -208,6 +208,49 @@ export type StaleRecoveryDecision =
   | { action: 'supersede' }
   | { action: 'wait'; reason: string };
 
+export type RefundReadiness =
+  | { action: 'in_flight'; row: any; reason: string }
+  | { action: 'reconcile'; row: any }
+  | { action: 'already_refunded' }
+  | { action: 'create'; amount: number };
+
+export interface PendingRowView {
+  txn_id: string;
+  amount: any;
+  created_at: Date | string;
+  razorpay_payment_id?: string | null;
+  booking_id: string;
+}
+
+/**
+ * Pure decision ordering for a refund request (unit tested):
+ * 1. Fresh pending intent  -> IN_FLIGHT (never ALREADY_REFUNDED).
+ * 2. Stale pending intent  -> reconcile first (caller handles the result).
+ * 3. Only with no pending intent: remaining <= 0 -> ALREADY_REFUNDED.
+ * 4. Otherwise a fresh intent may be created for `amount`.
+ */
+export function evaluateRefundReadiness(args: {
+  capturedAmount: number;
+  successAmounts: number[];
+  pendingRows: PendingRowView[];
+  quotedAmount: number;
+  nowMs: number;
+  staleMs: number;
+}): RefundReadiness {
+  const byAge = [...args.pendingRows].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+  const fresh = byAge.find((r) => args.nowMs - new Date(r.created_at).getTime() < args.staleMs);
+  if (fresh) return { action: 'in_flight', row: fresh, reason: 'pending-intent-active' };
+  const stale = byAge[0];
+  if (stale) return { action: 'reconcile', row: stale };
+  const totals = computeRefundTotals(args.capturedAmount, args.successAmounts, [], args.quotedAmount);
+  if (totals.remainingRefundableAmount <= 0 || totals.requestedAmount <= 0) {
+    return { action: 'already_refunded' };
+  }
+  return { action: 'create', amount: totals.requestedAmount };
+}
+
 /**
  * Pure decision for a stale pending intent given a gateway lookup result.
  * 'unknown' (timeout/500/malformed) ALWAYS waits — never fails the row,
@@ -314,53 +357,73 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
   // Serialize the decision phase in Postgres so concurrent requests (even
   // across instances / Redis outages) share one outcome. $queryRaw
   // parameterizes the booking id (never interpolate request input into SQL).
+  // Decision order (P2-final): fresh pending -> IN_FLIGHT; stale pending ->
+  // reconcile first; ALREADY_REFUNDED only with no pending intent; else a
+  // fresh intent may be created.
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('refund:' || ${req.bookingId}))`;
 
-    // Totals INSIDE the lock: pending intents reserve their amounts, so two
-    // concurrent partial refunds can never collectively exceed capture.
-    const [successRows, pendingRows] = await Promise.all([
-      tx.transaction.findMany({
-        where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
-        select: { amount: true },
-      }),
-      tx.transaction.findMany({
-        where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'pending' },
-        select: { txn_id: true, amount: true, created_at: true, razorpay_payment_id: true },
-      }),
-    ]);
-    const totals = computeRefundTotals(
-      Number(booking.online_amount),
-      successRows.map((r) => Number(r.amount)),
-      pendingRows.map((r) => Number(r.amount)),
-      Number(quote.amount.toFixed(2))
-    );
-    if (totals.remainingRefundableAmount <= 0) {
-      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
-    }
-    if (totals.requestedAmount <= 0) {
-      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
-    }
-    const amount = totals.requestedAmount;
+    const readRefundRows = async () => {
+      const [successRows, pendingRows] = await Promise.all([
+        tx.transaction.findMany({
+          where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'success' },
+          select: { amount: true },
+        }),
+        tx.transaction.findMany({
+          where: { booking_id: req.bookingId, txn_type: 'refund', txn_status: 'pending' },
+          select: { txn_id: true, amount: true, created_at: true, razorpay_payment_id: true, booking_id: true },
+        }),
+      ]);
+      return { successRows, pendingRows };
+    };
 
-    const freshPending = pendingRows.filter(
-      (r: any) => now.getTime() - new Date(r.created_at).getTime() < PENDING_STALE_MS
-    );
-    if (freshPending.length > 0) {
-      const row = freshPending.sort(
-        (a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )[0];
-      return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
+    let { successRows, pendingRows } = await readRefundRows();
+    let readiness = evaluateRefundReadiness({
+      capturedAmount: Number(booking.online_amount),
+      successAmounts: successRows.map((r) => Number(r.amount)),
+      pendingRows,
+      quotedAmount: Number(quote.amount.toFixed(2)),
+      nowMs: now.getTime(),
+      staleMs: PENDING_STALE_MS,
+    });
+
+    if (readiness.action === 'in_flight') {
+      const row = readiness.row;
+      return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: readiness.reason } as RefundOutcome;
     }
 
-    const stalePending = pendingRows
-      .filter((r: any) => now.getTime() - new Date(r.created_at).getTime() >= PENDING_STALE_MS)
-      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] as any;
-    if (stalePending) {
-      // Reconcile BEFORE any new gateway call. 'unknown' returns in-flight
-      // WITHOUT failing the row and WITHOUT a fresh call (see helper).
-      const recovered = await reconcileStalePending(tx as any, stalePending, paymentId, mockPayment, quote.eligibility);
+    if (readiness.action === 'reconcile') {
+      const recovered = await reconcileStalePending(tx as any, readiness.row, paymentId, mockPayment, quote.eligibility);
       if (recovered) return recovered;
+      // Superseded (or converged without success): re-read and re-evaluate
+      // before deciding ALREADY_REFUNDED vs a fresh intent.
+      ({ successRows, pendingRows } = await readRefundRows());
+      readiness = evaluateRefundReadiness({
+        capturedAmount: Number(booking.online_amount),
+        successAmounts: successRows.map((r) => Number(r.amount)),
+        pendingRows,
+        quotedAmount: Number(quote.amount.toFixed(2)),
+        nowMs: now.getTime(),
+        staleMs: PENDING_STALE_MS,
+      });
+      if (readiness.action === 'in_flight') {
+        const row = readiness.row;
+        return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: readiness.reason } as RefundOutcome;
+      }
+      if (readiness.action === 'reconcile') {
+        // A new stale row appeared mid-flow (practically impossible under
+        // the advisory lock): stay safe and report in-flight.
+        const row = readiness.row;
+        return { duplicate: true, inFlight: true, refundTxn: row, amount: Number(row.amount), eligibility: quote.eligibility, gateway: 'razorpay', status: 'in_flight', reason: 'pending-intent-active' } as RefundOutcome;
+      }
+    }
+
+    if (readiness.action === 'already_refunded') {
+      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
+    }
+    const amount = readiness.action === 'create' ? readiness.amount : 0;
+    if (amount <= 0) {
+      throw new ConflictError('Booking already fully refunded', 'ALREADY_REFUNDED');
     }
 
     // Durable intent first; gateway call happens after commit (see below).
@@ -401,33 +464,17 @@ export async function requestBookingRefund(req: RefundRequest): Promise<RefundOu
 }
 
 /**
- * Reconcile a stale pending intent. Returns an outcome when the stale row
- * resolves the request, or null when the caller may proceed to a fresh
- * intent. Gateway uncertainty ('unknown') NEVER fails the row.
+ * Apply a reconcile decision to a stale row with conditional writes.
+ * Exported for unit tests. A concurrent webhook finalizer winning first
+ * converges instead of clobbering. Returns an outcome, or null when the
+ * caller may proceed to a fresh intent (supersede path only).
  */
-async function reconcileStalePending(
-  tx: any, pendingRow: any, paymentId: string, mockPayment: boolean, eligibility: string
+export async function applyStaleDecision(
+  tx: any,
+  pendingRow: any,
+  decision: StaleRecoveryDecision,
+  eligibility: string
 ): Promise<RefundOutcome | null> {
-  if (mockPayment) {
-    // Mock gateway has no list API and can never have succeeded externally;
-    // supersede deterministically (no lookup to misinterpret). Conditional
-    // so a concurrent finalizer winning first converges instead of clobbering.
-    const superseded = await tx.transaction.updateMany({
-      where: { txn_id: pendingRow.txn_id, txn_status: 'pending' },
-      data: { txn_status: 'failed' },
-    });
-    if (superseded.count === 0) {
-      return convergeOnRefundWinner(tx, pendingRow, eligibility);
-    }
-    return null;
-  }
-  const { keyId, keySecret } = await resolveRazorpayKeys().catch(() => ({ keyId: '', keySecret: '' }));
-  if (!keyId || !keySecret) return null; // cannot reconcile; leave pending for retry
-  const lookup = await queryGatewayRefunds(paymentId, keyId, keySecret);
-  const decision = decideStaleRecovery(
-    lookup, pendingRow,
-    { paymentId, amountPaise: toPaise(Number(pendingRow.amount)) }
-  );
   if (decision.action === 'wait') {
     return {
       duplicate: true, inFlight: true, refundTxn: pendingRow,
@@ -447,9 +494,8 @@ async function reconcileStalePending(
     const adopted = await tx.transaction.findUnique({ where: { txn_id: pendingRow.txn_id } });
     return { duplicate: true, refundTxn: adopted, amount: Number(adopted.amount), eligibility: 'RECONCILED', gateway: 'razorpay', status: 'duplicate' };
   }
-  // 'supersede': the stale intent provably moved no money — fail it so a
-  // fresh attempt starts clean. Conditional on still-pending (a concurrent
-  // webhook may have finalized it; then converge on the winner instead).
+  // 'supersede': provably moved no money — conditional fail so a fresh
+  // attempt starts clean.
   const superseded = await tx.transaction.updateMany({
     where: { txn_id: pendingRow.txn_id, txn_status: 'pending' },
     data: { txn_status: 'failed' },
@@ -458,6 +504,39 @@ async function reconcileStalePending(
     return convergeOnRefundWinner(tx, pendingRow, eligibility);
   }
   return null;
+}
+
+/**
+ * Reconcile a stale pending intent. Returns an outcome when the stale row
+ * resolves the request, or null when the caller may proceed to a fresh
+ * intent. Gateway uncertainty ('unknown') NEVER fails the row.
+ *
+ * Missing Razorpay credentials: the row is left PENDING and an in-flight /
+ * awaiting-reconciliation outcome is returned. No fake id, no second row,
+ * no gateway call. Exported for unit tests.
+ */
+export async function reconcileStalePending(
+  tx: any, pendingRow: any, paymentId: string, mockPayment: boolean, eligibility: string
+): Promise<RefundOutcome | null> {
+  if (mockPayment) {
+    // Mock gateway has no list API and can never have succeeded externally;
+    // supersede deterministically (no lookup to misinterpret).
+    return applyStaleDecision(tx, pendingRow, { action: 'supersede' }, eligibility);
+  }
+  const { keyId, keySecret } = await resolveRazorpayKeys().catch(() => ({ keyId: '', keySecret: '' }));
+  if (!keyId || !keySecret) {
+    return {
+      duplicate: true, inFlight: true, refundTxn: pendingRow,
+      amount: Number(pendingRow.amount), eligibility, gateway: 'razorpay',
+      status: 'in_flight', reason: 'reconciliation-pending-no-credentials',
+    };
+  }
+  const lookup = await queryGatewayRefunds(paymentId, keyId, keySecret);
+  const decision = decideStaleRecovery(
+    lookup, pendingRow,
+    { paymentId, amountPaise: toPaise(Number(pendingRow.amount)) }
+  );
+  return applyStaleDecision(tx, pendingRow, decision, eligibility);
 }
 
 /** Shared convergence: report the winning refund row instead of clobbering. */
