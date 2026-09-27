@@ -10,6 +10,14 @@ import {
 } from '../../shared/utils/errors.js';
 import { WebSocketService } from '../../shared/services/websocket.js';
 import { sendPushNotification } from '../../config/fcm.js';
+import {
+  sanitizeBookingForResponse,
+  toAdminPartner,
+  toBookingUser,
+  toBookingEvent,
+  toPublicUser,
+  toSelfUser,
+} from '../../shared/utils/bookingPrivacy.js';
 
 export class AdminService {
   // 1. Admin Authentication
@@ -146,9 +154,11 @@ export class AdminService {
 
   // 3. Platform Users Ledger
   public static async getUsers() {
-    return prisma.user.findMany({
+    const users = await prisma.user.findMany({
       orderBy: { created_at: 'desc' }
     });
+    // B2: credentials must never leave the server, even for admins.
+    return users.map(toSelfUser);
   }
 
   public static async updateUserStatus(userId: string, status: string) {
@@ -157,15 +167,15 @@ export class AdminService {
     });
     if (!user) throw new ValidationError("User not found");
 
-    return prisma.user.update({
+    return toSelfUser(await prisma.user.update({
       where: { user_id: userId },
       data: { status }
-    });
+    }));
   }
 
   // 4. Platform Partners Ledger
   public static async getPartners() {
-    return prisma.partner.findMany({
+    const partners = await prisma.partner.findMany({
       include: {
         partner_documents: true,
         venues: true,
@@ -173,16 +183,18 @@ export class AdminService {
       },
       orderBy: { created_at: 'desc' }
     });
+    return partners.map(toAdminPartner);
   }
 
   // 5. KYC Pending Document Queue
   public static async getPendingKycDocuments() {
-    return prisma.partnerDocument.findMany({
+    const docs = await prisma.partnerDocument.findMany({
       where: { status: "pending" },
       include: {
         partner: true
       }
     });
+    return docs.map((d: any) => ({ ...d, partner: toAdminPartner(d.partner) }));
   }
 
   // 6. Approve or Reject KYC Document
@@ -257,7 +269,7 @@ export class AdminService {
 
   // 7. Venues Management
   public static async getAllVenues() {
-    return prisma.venue.findMany({
+    const venues = await prisma.venue.findMany({
       include: {
         partner: true,
         _count: {
@@ -266,6 +278,7 @@ export class AdminService {
       },
       orderBy: { created_at: 'desc' }
     });
+    return venues.map((v: any) => ({ ...v, partner: toAdminPartner(v.partner) }));
   }
 
   public static async updateVenueStatus(venueId: string, status: string) {
@@ -301,7 +314,7 @@ export class AdminService {
 
   // 8. Bookings Operations
   public static async getAllBookings() {
-    return prisma.booking.findMany({
+    const bookings = await prisma.booking.findMany({
       include: {
         user: true,
         venue: true,
@@ -310,6 +323,7 @@ export class AdminService {
       },
       orderBy: { created_at: 'desc' }
     });
+    return sanitizeBookingForResponse(bookings);
   }
 
   public static async cancelBooking(bookingId: string) {
@@ -346,7 +360,7 @@ export class AdminService {
       }
     });
 
-    WebSocketService.broadcast('bookings', updated);
+    WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
     WebSocketService.broadcast('slots', [updatedSlot]);
     return updated;
   }
@@ -386,14 +400,14 @@ export class AdminService {
       data: { status: "booked" }
     });
 
-    WebSocketService.broadcast('bookings', updated);
+    WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: updated.venue_id, slot_id: newSlotId }));
     WebSocketService.broadcast('slots', [oldSlot, freshSlot]);
     return updated;
   }
 
   // 9. Finance & Transactions
   public static async getTransactions() {
-    return prisma.transaction.findMany({
+    const txns = await prisma.transaction.findMany({
       include: {
         booking: {
           include: {
@@ -404,6 +418,7 @@ export class AdminService {
       },
       orderBy: { created_at: 'desc' }
     });
+    return txns.map((t: any) => ({ ...t, booking: sanitizeBookingForResponse(t.booking) }));
   }
 
   // 10. Coupons Management
@@ -476,7 +491,7 @@ export class AdminService {
 
   // 11. Disputes Management
   public static async getDisputes() {
-    return prisma.dispute.findMany({
+    const disputes = await prisma.dispute.findMany({
       include: {
         booking: {
           include: {
@@ -487,6 +502,7 @@ export class AdminService {
       },
       orderBy: { dispute_id: 'desc' }
     });
+    return disputes.map((d: any) => ({ ...d, booking: sanitizeBookingForResponse(d.booking) }));
   }
 
   public static async resolveDispute(disputeId: string, resolution: string) {
@@ -635,19 +651,19 @@ export class AdminService {
   public static async createUser(data: { name: string; email: string; phone_number: string; status?: string }) {
     const exists = await prisma.user.findUnique({ where: { phone_number: data.phone_number } });
     if (exists) throw new ConflictError("Phone number already exists");
-    return prisma.user.create({ data });
+    return toSelfUser(await prisma.user.create({ data }));
   }
 
   public static async updateUser(userId: string, data: { name?: string; email?: string; phone_number?: string; status?: string }) {
     const user = await prisma.user.findUnique({ where: { user_id: userId } });
     if (!user) throw new ValidationError("User not found");
-    return prisma.user.update({ where: { user_id: userId }, data });
+    return toSelfUser(await prisma.user.update({ where: { user_id: userId }, data }));
   }
 
   public static async deleteUser(userId: string) {
     const user = await prisma.user.findUnique({ where: { user_id: userId } });
     if (!user) throw new ValidationError("User not found");
-    return prisma.user.update({
+    return toSelfUser(await prisma.user.update({
       where: { user_id: userId },
       data: {
         phone_number: `deleted-user-${userId}`,
@@ -656,20 +672,20 @@ export class AdminService {
         fcm_token: null,
         status: 'Deleted'
       }
-    });
+    }));
   }
 
   // Partners CRUD
   public static async createPartner(data: { phone_number: string; kyc_status?: string; plan_tier?: string; total_earnings?: number }) {
     const exists = await prisma.partner.findUnique({ where: { phone_number: data.phone_number } });
     if (exists) throw new ConflictError("Partner phone number already exists");
-    return prisma.partner.create({ data });
+    return toAdminPartner(await prisma.partner.create({ data }));
   }
 
   public static async updatePartner(partnerId: string, data: { phone_number?: string; kyc_status?: string; plan_tier?: string; total_earnings?: number }) {
     const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId } });
     if (!partner) throw new ValidationError("Partner not found");
-    return prisma.partner.update({ where: { partner_id: partnerId }, data });
+    return toAdminPartner(await prisma.partner.update({ where: { partner_id: partnerId }, data }));
   }
 
   public static async deletePartner(partnerId: string) {
@@ -682,7 +698,7 @@ export class AdminService {
       data: { status: 'unlisted' }
     });
 
-    return prisma.partner.update({
+    return toAdminPartner(await prisma.partner.update({
       where: { partner_id: partnerId },
       data: {
         phone_number: `deleted-partner-${partnerId}`,
@@ -691,14 +707,14 @@ export class AdminService {
         password_hash: null,
         kyc_status: 'deleted'
       }
-    });
+    }));
   }
 
   public static async approveBankDetails(partnerId: string) {
     const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId } });
     if (!partner) throw new ValidationError("Partner not found");
 
-    return prisma.partner.update({
+    return toAdminPartner(await prisma.partner.update({
       where: { partner_id: partnerId },
       data: {
         bank_name: partner.temp_bank_name,
@@ -709,14 +725,14 @@ export class AdminService {
         temp_bank_ifsc: null,
         bank_status: 'approved'
       }
-    });
+    }));
   }
 
   public static async rejectBankDetails(partnerId: string) {
     const partner = await prisma.partner.findUnique({ where: { partner_id: partnerId } });
     if (!partner) throw new ValidationError("Partner not found");
 
-    return prisma.partner.update({
+    return toAdminPartner(await prisma.partner.update({
       where: { partner_id: partnerId },
       data: {
         temp_bank_name: null,
@@ -724,7 +740,7 @@ export class AdminService {
         temp_bank_ifsc: null,
         bank_status: 'approved' // Revert status back to approved for the active details
       }
-    });
+    }));
   }
 
   // Venues CRUD
@@ -788,10 +804,11 @@ export class AdminService {
 
   // Reviews CRUD
   public static async getReviews() {
-    return prisma.venueReview.findMany({
+    const reviews = await prisma.venueReview.findMany({
       include: { user: true, venue: true, booking: true },
       orderBy: { review_id: 'desc' }
     });
+    return reviews.map((r: any) => ({ ...r, user: toPublicUser(r.user) }));
   }
 
   public static async createReview(data: { venue_id: string; user_id: string; booking_id: string; rating: number; comment: string; reply?: string }) {
@@ -808,10 +825,11 @@ export class AdminService {
 
   // Settlements CRUD
   public static async getSettlements() {
-    return prisma.settlement.findMany({
+    const settlements = await prisma.settlement.findMany({
       include: { partner: true },
       orderBy: { created_at: 'desc' }
     });
+    return settlements.map((s: any) => ({ ...s, partner: toAdminPartner(s.partner) }));
   }
 
   public static async createSettlement(data: { partner_id: string; period_start: string; period_end: string; gross_amount: number; platform_fee: number; net_amount: number; status?: string }) {
@@ -844,7 +862,7 @@ export class AdminService {
       ).catch(e => console.error("FCM error notifying partner of settled payment:", e));
     }
 
-    return updated;
+    return { ...updated, partner: toAdminPartner(updated.partner) };
   }
 
   public static async deleteSettlement(settlementId: string) {

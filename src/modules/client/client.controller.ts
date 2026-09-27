@@ -5,6 +5,7 @@ import { prisma } from '../../config/prisma.js';
 import { AdminService } from '../admin/admin.service.js';
 import { ForbiddenError } from '../../shared/utils/errors.js';
 import { resolvePrivateFile, validateUploadedFileContent } from '../../middleware/upload.js';
+import { SAFE_USER_PUBLIC_SELECT } from '../../shared/utils/bookingPrivacy.js';
 
 function requirePartner(req: AuthRequest): string {
   if (!req.user || req.user.role !== 'partner') {
@@ -522,7 +523,7 @@ export class ClientController {
           comment
         },
         include: {
-          user: true
+          user: { select: SAFE_USER_PUBLIC_SELECT }
         }
       });
 

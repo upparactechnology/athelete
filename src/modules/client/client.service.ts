@@ -19,6 +19,16 @@ import {
   verifyRazorpayPaymentSignature,
   verifyRazorpayWebhookSignature,
 } from '../../shared/utils/razorpay.js';
+import {
+  SAFE_PARTNER_PUBLIC_SELECT,
+  SAFE_USER_PUBLIC_SELECT,
+  resolveWebhookTransition,
+  sanitizeBookingForResponse,
+  toBookingEvent,
+  toOwnerPartner,
+  toPublicUser,
+  toSelfUser,
+} from '../../shared/utils/bookingPrivacy.js';
 import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
 
 const OTP_RESEND_COOLDOWN_KEY = (phone: string) => `otp:cooldown:${phone}`;
@@ -422,14 +432,15 @@ export class ClientService {
         include: { venues: true, partner_documents: true }
       });
       if (!partner) throw new NotFoundError("Partner profile not found");
-      return partner;
+      // Own profile: bank display allowed, credentials never leave the server.
+      return toOwnerPartner(partner);
     } else {
       const user = await prisma.user.findUnique({
         where: { user_id: id },
         include: { user_milestones: { include: { coupon: true } } }
       });
       if (!user) throw new NotFoundError("User profile not found");
-      return user;
+      return toSelfUser(user);
     }
   }
 
@@ -460,10 +471,10 @@ export class ClientService {
         }
       }
 
-      return prisma.partner.update({
+      return toOwnerPartner(await prisma.partner.update({
         where: { partner_id: id },
         data: updateData
-      });
+      }));
     } else {
       const updateData: any = {};
       if (data.name !== undefined) updateData.name = data.name;
@@ -476,10 +487,10 @@ export class ClientService {
       if (data.password !== undefined && data.password !== null && data.password.trim() !== '') {
         updateData.password_hash = await bcrypt.hash(data.password, 10);
       }
-      return prisma.user.update({
+      return toSelfUser(await prisma.user.update({
         where: { user_id: id },
         data: updateData
-      });
+      }));
     }
   }
 
@@ -529,7 +540,8 @@ export class ClientService {
     }
     const venues = await prisma.venue.findMany({
       where: filter,
-      include: { partner: true }
+      // Public listing: partner bank/KYC identity fields must never leak.
+      include: { partner: { select: SAFE_PARTNER_PUBLIC_SELECT } }
     });
 
     if (lat && lng) {
@@ -595,7 +607,8 @@ export class ClientService {
     const venue = await prisma.venue.findUnique({
       where: { venue_id: venueId },
       include: {
-        reviews: { include: { user: true } },
+        // Public reviews: reviewer identity limited to public card.
+        reviews: { include: { user: { select: SAFE_USER_PUBLIC_SELECT } } },
         tournaments: true
       }
     });
@@ -707,7 +720,7 @@ export class ClientService {
       throw err;
     }
 
-    WebSocketService.broadcast('bookings', booking);
+    WebSocketService.broadcast('bookings', toBookingEvent(booking));
     const slotObj = await prisma.slot.findUnique({ where: { slot_id: slotId } });
     if (slotObj) {
       WebSocketService.broadcast('slots', [slotObj]);
@@ -856,7 +869,7 @@ export class ClientService {
         where: { booking_id: bookingId },
         include: { user: true, venue: { include: { partner: true } }, slot: true },
       });
-      return { ...current, alreadyProcessed: true };
+      return { ...sanitizeBookingForResponse(current), alreadyProcessed: true };
     }
     const paymentGuard = await redis.set(BOOKING_PAYMENT_GUARD_KEY(razorpayPaymentId), bookingId, { NX: true, EX: 86400 * 30 });
     if (paymentGuard === null) {
@@ -960,13 +973,22 @@ export class ClientService {
         ).catch(e => console.error("FCM error notifying partner of new booking:", e));
       }
 
-      WebSocketService.broadcast('bookings', booking);
+      // B1: global broadcast carries ONLY the minimal scalar event. The
+      // affected user + partner each get a targeted event instead.
+      const bookingEvent = toBookingEvent(booking);
+      const bookingPrivateEvent = toBookingEvent(booking, { includePrivate: true });
+      const partnerId = (booking.venue as any)?.partner?.partner_id ?? (booking.venue as any)?.partner_id;
+      WebSocketService.broadcast('bookings', bookingEvent);
+      WebSocketService.emitToUser(booking.user_id, 'booking_confirmed', bookingPrivateEvent);
+      if (partnerId) {
+        WebSocketService.emitToUser(partnerId, 'booking_received', bookingPrivateEvent);
+      }
       const slot = await prisma.slot.findUnique({ where: { slot_id: booking.slot_id } });
       if (slot) {
         WebSocketService.broadcast('slots', [slot]);
       }
 
-      return booking;
+      return sanitizeBookingForResponse(booking);
     } catch (err) {
       // Release the idempotency guard on genuine verification failures so a
       // legitimate retry with a NEW payment can proceed. Confirmed bookings
@@ -1017,29 +1039,99 @@ export class ClientService {
       return { ignored: true, reason: 'unknown-order' };
     }
     if (type === 'payment.captured' || type === 'payment.authorized') {
-      if (txn.txn_status === 'success') return { duplicate: true, event: type };
-      await prisma.$transaction([
-        prisma.transaction.update({
+      // B3 state machine: verify amount/currency against the server-side
+      // booking row, and only ever PENDING -> CONFIRMED atomically.
+      const bookingRow = await prisma.booking.findUnique({ where: { booking_id: txn.booking_id } });
+      if (!bookingRow) {
+        return { ignored: true, reason: 'unknown-booking' };
+      }
+      const amountOk = Number(payment?.amount) === toPaise(Number(bookingRow.online_amount));
+      const currencyOk = String(payment?.currency || RAZORPAY_CURRENCY).toUpperCase() === RAZORPAY_CURRENCY;
+      const transition = resolveWebhookTransition(bookingRow.status, amountOk, currencyOk, txn.txn_status);
+
+      if (transition.action === 'duplicate') {
+        return { duplicate: true, event: type };
+      }
+      if (transition.action === 'record_mismatch') {
+        // Money event recorded truthfully, booking untouched.
+        await prisma.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: paymentId, txn_status: 'failed' },
+        });
+        console.warn(`Webhook ${transition.reason} for booking ${txn.booking_id} (order ${orderId}); booking left ${bookingRow.status}.`);
+        return { processed: true, event: type, bookingId: txn.booking_id, confirmed: false, reason: transition.reason };
+      }
+      if (transition.action === 'converge') {
+        // Booking already CONFIRMED via another path: converge the ledger
+        // without duplicating stats/notifications.
+        await prisma.transaction.update({
           where: { txn_id: txn.txn_id },
           data: { razorpay_payment_id: paymentId, txn_status: 'success' },
-        }),
-        prisma.booking.update({ where: { booking_id: txn.booking_id }, data: { status: 'CONFIRMED' } }),
-      ]);
+        });
+        return { processed: true, event: type, bookingId: txn.booking_id, confirmed: false, reason: transition.reason };
+      }
+      if (transition.action === 'record_truthful') {
+        // Genuine capture for a booking that may no longer confirm
+        // (e.g. CANCELLED after slot release): record payment success for
+        // finance reconciliation, NEVER touch booking/slot/stats.
+        await prisma.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: paymentId, txn_status: 'success' },
+        });
+        console.warn(`Webhook capture for non-pending booking ${txn.booking_id} (status ${bookingRow.status}); payment recorded, booking untouched.`);
+        return { processed: true, event: type, bookingId: txn.booking_id, confirmed: false, reason: transition.reason };
+      }
+
+      // action === 'confirm': atomic PENDING -> CONFIRMED. The conditional
+      // update is the correctness guarantee under concurrent webhooks.
+      const confirmResult = await prisma.$transaction(async (tx) => {
+        const confirmedCount = await tx.booking.updateMany({
+          where: { booking_id: txn.booking_id, status: 'PENDING' },
+          data: { status: 'CONFIRMED' },
+        });
+        if (confirmedCount.count === 0) {
+          // Lost a race (cancelled/confirmed concurrently): record payment
+          // truthfully, do not touch booking/slot/stats.
+          await tx.transaction.update({
+            where: { txn_id: txn.txn_id },
+            data: { razorpay_payment_id: paymentId, txn_status: 'success' },
+          });
+          return { raced: true };
+        }
+        await tx.transaction.update({
+          where: { txn_id: txn.txn_id },
+          data: { razorpay_payment_id: paymentId, txn_status: 'success' },
+        });
+        const updatedUser = await tx.user.update({
+          where: { user_id: bookingRow.user_id },
+          data: {
+            total_bookings: { increment: 1 },
+            total_spend: { increment: bookingRow.online_amount },
+          },
+        });
+        return { raced: false, updatedUser };
+      });
+      if (confirmResult.raced) {
+        console.warn(`Webhook confirm raced for booking ${txn.booking_id}; payment recorded, booking untouched.`);
+        return { processed: true, event: type, bookingId: txn.booking_id, confirmed: false, reason: 'confirm-race' };
+      }
+
       const booking = await prisma.booking.findUnique({
         where: { booking_id: txn.booking_id },
         include: { user: true, venue: { include: { partner: true } }, slot: true },
       });
       if (booking) {
-        await prisma.user.update({
-          where: { user_id: booking.user_id },
-          data: {
-            total_bookings: { increment: 1 },
-            total_spend: { increment: booking.online_amount },
-          },
-        }).catch((e) => console.error('Webhook user-stats update failed:', e));
-        WebSocketService.broadcast('bookings', booking);
+        // B1: minimal global event + targeted delivery (never full relations).
+        const bookingEvent = toBookingEvent(booking);
+        const bookingPrivateEvent = toBookingEvent(booking, { includePrivate: true });
+        const partnerId = (booking.venue as any)?.partner?.partner_id ?? (booking.venue as any)?.partner_id;
+        WebSocketService.broadcast('bookings', bookingEvent);
+        WebSocketService.emitToUser(booking.user_id, 'booking_confirmed', bookingPrivateEvent);
+        if (partnerId) {
+          WebSocketService.emitToUser(partnerId, 'booking_received', bookingPrivateEvent);
+        }
       }
-      return { processed: true, event: type, bookingId: txn.booking_id };
+      return { processed: true, event: type, bookingId: txn.booking_id, confirmed: true };
     }
     if (type === 'payment.failed') {
       if (txn.txn_status !== 'success') {
@@ -1138,7 +1230,12 @@ export class ClientService {
       ).catch(e => console.error("FCM error notifying partner of cancelled booking:", e));
     }
 
-    WebSocketService.broadcast('bookings', updated);
+    WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
+    WebSocketService.emitToUser(booking.user_id, 'booking_cancelled', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
+    const cancelPartnerId = (booking.venue as any)?.partner_id;
+    if (cancelPartnerId) {
+      WebSocketService.emitToUser(cancelPartnerId, 'booking_cancelled', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
+    }
     WebSocketService.broadcast('slots', [updatedSlot]);
 
     return {
@@ -1436,7 +1533,7 @@ export class ClientService {
   }
 
   public static async getPartnerBookings(partnerId: string) {
-    return prisma.booking.findMany({
+    const bookings = await prisma.booking.findMany({
       where: {
         venue: {
           partner_id: partnerId
@@ -1449,6 +1546,8 @@ export class ClientService {
       },
       orderBy: { created_at: 'desc' }
     });
+    // Partner sees player contact card only — never credentials.
+    return sanitizeBookingForResponse(bookings);
   }
 
   public static async checkinBooking(bookingId: string, partnerId?: string) {
@@ -1478,12 +1577,13 @@ export class ClientService {
       ).catch(e => console.error("FCM error notifying user of check-in:", e));
     }
 
-    WebSocketService.broadcast('bookings', updated);
-    return { success: true, message: "Player checked in successfully", booking: updated };
+    WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }));
+    WebSocketService.emitToUser(booking.user_id, 'checked_in', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }, { includePrivate: true }));
+    return { success: true, message: "Player checked in successfully", booking: sanitizeBookingForResponse({ ...updated, user: booking.user, venue: booking.venue }) };
   }
 
   public static async getPartnerDisputes(partnerId: string) {
-    return prisma.dispute.findMany({
+    const disputes = await prisma.dispute.findMany({
       where: {
         booking: {
           venue: {
@@ -1501,6 +1601,7 @@ export class ClientService {
       },
       orderBy: { dispute_id: 'desc' }
     });
+    return disputes.map((d: any) => ({ ...d, booking: sanitizeBookingForResponse(d.booking) }));
   }
 
   public static async createPartnerDispute(bookingId: string, details: string, partnerId?: string) {
@@ -1533,7 +1634,7 @@ export class ClientService {
   }
 
   public static async getPartnerReviews(partnerId: string) {
-    return prisma.venueReview.findMany({
+    const reviews = await prisma.venueReview.findMany({
       where: {
         venue: {
           partner_id: partnerId
@@ -1545,6 +1646,7 @@ export class ClientService {
       },
       orderBy: { review_id: 'desc' }
     });
+    return reviews.map((r: any) => ({ ...r, user: toPublicUser(r.user) }));
   }
 
   public static async replyToReview(reviewId: string, reply: string, partnerId?: string) {
