@@ -141,16 +141,34 @@ Paste and adjust the following configurations:
 PORT=4000
 DATABASE_URL="postgresql://athlete_user:yourpassword@localhost:5432/athelete?schema=public"
 REDIS_URL="redis://localhost:6379"
-JWT_SECRET="generate_a_long_random_jwt_secret_string"
+JWT_ACCESS_SECRET="generate_a_long_random_access_secret"
+JWT_REFRESH_SECRET="generate_a_long_random_refresh_secret_different_from_access"
+ADMIN_EMAIL="admin@yourdomain.com"
+ADMIN_PASSWORD_HASH="bcrypt_hash_of_admin_password"
+ALLOWED_ORIGINS="https://yourdomain.com"
 NODE_ENV="production"
 ```
+> The backend requires `JWT_ACCESS_SECRET` **and** `JWT_REFRESH_SECRET`
+> (two different values). The old singular `JWT_SECRET` is not recognized
+> and startup will fail validation without both.
+> Never enable `ALLOW_MOCK_PAYMENTS=true` or `OTP_DEV_MODE=true` in
+> production. Set Razorpay (`RAZORPAY_KEY_ID/KEY_SECRET/WEBHOOK_SECRET`)
+> and Google (`GOOGLE_CLIENT_ID`) values from the payment/console
+> dashboards, never from development files.
 *Save and close the file (`Ctrl + O`, `Enter`, then `Ctrl + X`).*
 
-### Push the Database Schema
-Execute Prisma to create the database tables:
+### Apply the Database Migrations (never `db push` on production)
+Execute Prisma migrations. `db push` is forbidden on production: the
+Prisma schema language cannot express the partial unique index
+`transactions_one_pending_refund_per_booking`, so a pushed database
+silently loses the exactly-one-pending-refund guarantee:
 ```bash
-npx prisma db push
+npx prisma migrate deploy
+npx prisma migrate status
 ```
+For the Phase 2 hardening migration on a database created before
+migrations existed, follow the production migration runbook (backup,
+preflight duplicate checks, apply, verify) instead of a plain deploy.
 
 ---
 
@@ -266,6 +284,6 @@ cd /var/www/athlete-backend
 git pull
 npm install
 npm run build
-npx prisma db push # If there are schema changes
+npx prisma migrate deploy # NEVER `db push` on production (see section 4)
 pm2 restart athlete-backend
 ```

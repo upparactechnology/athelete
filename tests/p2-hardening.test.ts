@@ -402,6 +402,8 @@ describe('P2-8/9 + migration static guards', () => {
     const src = fs.readFileSync(new URL('../src/shared/services/refunds.ts', import.meta.url), 'utf8');
     expect(src).not.toContain('$queryRawUnsafe');
     expect(src).toContain('pg_advisory_xact_lock');
+    // P2010 on real PG: void-returning lock must go through $executeRaw.
+    expect(src).toContain('$executeRaw`SELECT pg_advisory_xact_lock');
   });
 
   it('no invented Razorpay idempotency parameters', () => {
@@ -1428,6 +1430,11 @@ function makeRefundClaimTx(opts: {
     async $queryRaw(..._a: any[]) {
       ops.push('lock');
       return [];
+    },
+    // claimRefundIntent takes the advisory lock via $executeRaw (void-safe).
+    async $executeRaw(..._a: any[]) {
+      ops.push('lock');
+      return 1;
     },
     transaction: {
       async findMany({ where }: any) {

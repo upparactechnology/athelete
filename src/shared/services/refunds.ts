@@ -418,7 +418,9 @@ interface RefundClaimContext {
  */
 export async function claimRefundIntent(tx: any, ctx: RefundClaimContext): Promise<any> {
   const { req, booking, capture, paymentId, mockPayment, quote, now } = ctx;
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('refund:' || ${req.bookingId}))`;
+  // $executeRaw (NOT $queryRaw): pg_advisory_xact_lock returns void, which
+  // Prisma cannot deserialize (P2010) on real PostgreSQL. Found by Phase 3.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('refund:' || ${req.bookingId}))`;
 
   const readRefundRows = async () => {
     const [successRows, pendingRows] = await Promise.all([

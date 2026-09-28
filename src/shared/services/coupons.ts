@@ -23,7 +23,9 @@ export interface CouponClaimInput {
 export async function claimCouponUsage(tx: any, input: CouponClaimInput): Promise<{ coupon: any }> {
   const now = input.now ?? new Date();
   // $queryRaw parameterizes (never interpolate request input into SQL).
-  await tx.$queryRaw`SELECT coupon_id FROM coupons WHERE coupon_id = ${input.couponId} FOR UPDATE`;
+  // ::uuid cast is REQUIRED: Prisma binds the JS string as text and real
+  // PostgreSQL rejects `uuid = text` (42883). Found by Phase 3 real-PG run.
+  await tx.$queryRaw`SELECT coupon_id FROM coupons WHERE coupon_id = ${input.couponId}::uuid FOR UPDATE`;
   const coupon = await tx.coupon.findUnique({ where: { coupon_id: input.couponId } });
   if (!coupon || !coupon.is_active) {
     throw new ValidationError('Coupon is not active');
@@ -109,7 +111,8 @@ export async function rollbackCouponForBooking(bookingId: string, db: any = pris
     const flipped = await db.$transaction(async (tx: any) => {
       // BEGIN: lock the coupon row so concurrent rollbacks of the same
       // redemption serialize instead of interleaving flip/decrement.
-      await tx.$queryRaw`SELECT coupon_id FROM coupons WHERE coupon_id = ${row.coupon_id} FOR UPDATE`;
+      // ::uuid cast required (see claimCouponUsage): Prisma binds text.
+      await tx.$queryRaw`SELECT coupon_id FROM coupons WHERE coupon_id = ${row.coupon_id}::uuid FOR UPDATE`;
       const claimed = await tx.couponRedemption.updateMany({
         where: { red_id: row.red_id, status: 'applied' },
         data: { status: 'rolled_back' },
