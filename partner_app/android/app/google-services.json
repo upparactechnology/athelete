@@ -1,4 +1,4 @@
-﻿{
+{
   "project_info": {
     "project_number": "239542933796",
     "project_id": "athelete-30fd7",
@@ -7,18 +7,26 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:239542933796:android:467cdef871034f7c017bb1",
+        "mobilesdk_app_id": "1:239542933796:android:489e51483447759b017bb1",
         "android_client_info": {
-          "package_name": "com.athletepov.player.player_app"
+          "package_name": "com.athletepov.partner"
         }
       },
       "oauth_client": [
         {
-          "client_id": "239542933796-g56m9ja3fpssrp331heh7qca6bh3oo3l.apps.googleusercontent.com",
+          "client_id": "239542933796-larmj3tbpenilqlm0i7mamq8bt7l0hls.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.athletepov.player.player_app",
+            "package_name": "com.athletepov.partner",
             "certificate_hash": "cfba2bcc7f0ab2e97e0642d2dcae9790498b2f89"
+          }
+        },
+        {
+          "client_id": "239542933796-n3jnn2f2fu0hnvr92ipe5pjdlpg35su1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.athletepov.partner",
+            "certificate_hash": "509d030dd0ee5dd05c98c550bb9985d39138ee32"
           }
         },
         {
@@ -44,17 +52,17 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:239542933796:android:074b0edc1116a952017bb1",
+        "mobilesdk_app_id": "1:239542933796:android:467cdef871034f7c017bb1",
         "android_client_info": {
-          "package_name": "com.athletepov.partner"
+          "package_name": "com.athletepov.player.player_app"
         }
       },
       "oauth_client": [
         {
-          "client_id": "239542933796-k04kv6e71ubigivqftgtqlhffgb13t6c.apps.googleusercontent.com",
+          "client_id": "239542933796-g56m9ja3fpssrp331heh7qca6bh3oo3l.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.athletepov.partner",
+            "package_name": "com.athletepov.player.player_app",
             "certificate_hash": "cfba2bcc7f0ab2e97e0642d2dcae9790498b2f89"
           }
         },
