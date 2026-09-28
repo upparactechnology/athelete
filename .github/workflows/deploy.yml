@@ -1,0 +1,114 @@
+name: Deploy Athlete POV
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: athlete-production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Hostinger VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Hostinger VPS
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+
+          script: |
+            set -e
+
+            echo "======================================"
+            echo "Athlete POV deployment started"
+            echo "======================================"
+
+            cd /var/www/athlete-backend
+
+            echo "Fetching latest GitHub code..."
+            git fetch origin main
+
+            echo "Checking out exact production branch..."
+            git reset --hard origin/main
+
+            echo "Installing dependencies..."
+            npm ci
+
+            echo "Generating Prisma client..."
+            npx prisma generate
+
+            echo "Applying production migrations..."
+            npx prisma migrate deploy
+
+            echo "Building TypeScript..."
+            npm run build
+
+            echo "Deploying website..."
+            mkdir -p /home/user/web/athletespov.com/public_html
+
+            rsync -a \
+              website/ \
+              /home/user/web/athletespov.com/public_html/
+
+            echo "Deploying website logos..."
+            mkdir -p /home/user/web/athletespov.com/public_html/logos
+
+            rsync -a \
+              logos/ \
+              /home/user/web/athletespov.com/public_html/logos/
+
+            echo "Fixing website ownership..."
+            chown -R user:user \
+              /home/user/web/athletespov.com/public_html
+
+            echo "Restarting Athlete backend..."
+            pm2 restart athlete-backend --update-env
+
+            echo "Saving PM2..."
+            pm2 save
+
+            echo "Testing website..."
+            SITE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/)
+
+            if [ "$SITE_STATUS" != "200" ]; then
+              echo "Website health check failed: HTTP $SITE_STATUS"
+              exit 1
+            fi
+
+            echo "Testing admin..."
+            ADMIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/admin/login.html)
+
+            if [ "$ADMIN_STATUS" != "200" ]; then
+              echo "Admin health check failed: HTTP $ADMIN_STATUS"
+              exit 1
+            fi
+
+            echo "Testing API routing..."
+            API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/api/)
+
+            if [ "$API_STATUS" != "401" ]; then
+              echo "API health check returned unexpected HTTP $API_STATUS"
+              exit 1
+            fi
+
+            echo "======================================"
+            echo "Athlete POV deployment successful"
+            echo "======================================"
+
+            pm2 status
