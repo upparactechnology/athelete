@@ -20,9 +20,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Deploy to Hostinger VPS
         uses: appleboy/ssh-action@v1.2.2
         with:
@@ -39,76 +36,170 @@ jobs:
             echo "Athlete POV deployment started"
             echo "======================================"
 
-            cd /var/www/athlete-backend
+            APP_DIR="/var/www/athlete-backend"
+            WEBSITE_DIR="/home/user/web/athletespov.com/public_html"
 
-            echo "Fetching latest GitHub code..."
+            cd "$APP_DIR"
+
+            echo "Recording current commit..."
+            CURRENT_SHA=$(git rev-parse HEAD)
+
+            echo "Fetching latest code from GitHub..."
             git fetch origin main
 
-            echo "Checking out exact production branch..."
-            git reset --hard origin/main
+            TARGET_SHA=$(git rev-parse origin/main)
 
-            echo "Installing dependencies..."
-            npm ci
+            echo "Current commit: $CURRENT_SHA"
+            echo "Target commit:  $TARGET_SHA"
 
-            echo "Generating Prisma client..."
-            npx prisma generate
-
-            echo "Applying production migrations..."
-            npx prisma migrate deploy
-
-            echo "Building TypeScript..."
-            npm run build
-
-            echo "Deploying website..."
-            mkdir -p /home/user/web/athletespov.com/public_html
-
-            rsync -a \
-              website/ \
-              /home/user/web/athletespov.com/public_html/
-
-            echo "Deploying website logos..."
-            mkdir -p /home/user/web/athletespov.com/public_html/logos
-
-            rsync -a \
-              logos/ \
-              /home/user/web/athletespov.com/public_html/logos/
-
-            echo "Fixing website ownership..."
-            chown -R user:user \
-              /home/user/web/athletespov.com/public_html
-
-            echo "Restarting Athlete backend..."
-            pm2 restart athlete-backend --update-env
-
-            echo "Saving PM2..."
-            pm2 save
-
-            echo "Testing website..."
-            SITE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/)
-
-            if [ "$SITE_STATUS" != "200" ]; then
-              echo "Website health check failed: HTTP $SITE_STATUS"
-              exit 1
+            if [ "$CURRENT_SHA" = "$TARGET_SHA" ]; then
+              echo "No new commit to deploy"
+              exit 0
             fi
 
-            echo "Testing admin..."
-            ADMIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/admin/login.html)
+            echo "Detecting changed files..."
+            CHANGED_FILES=$(git diff --name-only "$CURRENT_SHA" "$TARGET_SHA")
 
-            if [ "$ADMIN_STATUS" != "200" ]; then
-              echo "Admin health check failed: HTTP $ADMIN_STATUS"
-              exit 1
+            echo "Changed files:"
+            echo "$CHANGED_FILES"
+
+            WEBSITE_CHANGED=false
+            DEPENDENCIES_CHANGED=false
+            PRISMA_CHANGED=false
+            BACKEND_CHANGED=false
+            ADMIN_CHANGED=false
+
+            if echo "$CHANGED_FILES" | grep -qE '^website/'; then
+              WEBSITE_CHANGED=true
             fi
 
-            echo "Testing API routing..."
-            API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/api/)
+            if echo "$CHANGED_FILES" | grep -qE '^(package\.json|package-lock\.json)$'; then
+              DEPENDENCIES_CHANGED=true
+            fi
 
-            if [ "$API_STATUS" != "401" ]; then
-              echo "API health check returned unexpected HTTP $API_STATUS"
-              exit 1
+            if echo "$CHANGED_FILES" | grep -qE '^prisma/'; then
+              PRISMA_CHANGED=true
+            fi
+
+            if echo "$CHANGED_FILES" | grep -qE '^src/'; then
+              BACKEND_CHANGED=true
+            fi
+
+            if echo "$CHANGED_FILES" | grep -qE '^public/admin/'; then
+              ADMIN_CHANGED=true
+            fi
+
+            if [ "$DEPENDENCIES_CHANGED" = true ]; then
+              BACKEND_CHANGED=true
+            fi
+
+            echo "Website changed: $WEBSITE_CHANGED"
+            echo "Dependencies changed: $DEPENDENCIES_CHANGED"
+            echo "Prisma changed: $PRISMA_CHANGED"
+            echo "Backend changed: $BACKEND_CHANGED"
+            echo "Admin changed: $ADMIN_CHANGED"
+
+            if [ "$WEBSITE_CHANGED" = false ] \
+              && [ "$DEPENDENCIES_CHANGED" = false ] \
+              && [ "$PRISMA_CHANGED" = false ] \
+              && [ "$BACKEND_CHANGED" = false ] \
+              && [ "$ADMIN_CHANGED" = false ]; then
+              echo "No deployment work required for this commit"
+              git reset --hard "$TARGET_SHA"
+              exit 0
+            fi
+
+            echo "Updating working tree to target commit..."
+            git reset --hard "$TARGET_SHA"
+
+            if [ -s /root/.nvm/nvm.sh ]; then
+              source /root/.nvm/nvm.sh
+              if nvm use 22; then
+                echo "Using Node 22 via NVM"
+              else
+                echo "WARNING: Node 22 not installed in NVM; using system Node $(node --version)"
+              fi
+            else
+              echo "WARNING: NVM not found at /root/.nvm/nvm.sh; using system Node $(node --version)"
+            fi
+
+            if [ "$DEPENDENCIES_CHANGED" = true ]; then
+              echo "Running dependency installation..."
+              npm ci
+            fi
+
+            if [ "$PRISMA_CHANGED" = true ]; then
+              echo "Running Prisma migrations..."
+              npx prisma generate
+              npx prisma migrate deploy
+            fi
+
+            if [ "$BACKEND_CHANGED" = true ]; then
+              echo "Running backend build..."
+              npm run build
+
+              echo "Restarting athlete-backend..."
+              pm2 restart athlete-backend --update-env
+            fi
+
+            if [ "$WEBSITE_CHANGED" = true ]; then
+              echo "Running website deployment..."
+              mkdir -p "$WEBSITE_DIR"
+              rsync -a --delete website/ "$WEBSITE_DIR"/
+
+              echo "Running website logo deployment..."
+              mkdir -p "$WEBSITE_DIR/logos"
+              rsync -a logos/ "$WEBSITE_DIR/logos"/
+
+              echo "Fixing website ownership..."
+              chown -R user:user "$WEBSITE_DIR"
+            fi
+
+            if [ "$BACKEND_CHANGED" = true ]; then
+              echo "Waiting for athlete-backend health check..."
+              ADMIN_OK=false
+              for i in $(seq 1 30); do
+                ADMIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/admin/login.html || true)
+                if [ "$ADMIN_CODE" = "200" ]; then
+                  ADMIN_OK=true
+                  break
+                fi
+                sleep 2
+              done
+
+              if [ "$ADMIN_OK" = false ]; then
+                echo "Admin health check failed"
+                exit 1
+              fi
+
+              echo "Testing API routing..."
+              API_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/api/ || true)
+
+              if [ "$API_CODE" != "401" ] && [ "$API_CODE" != "200" ]; then
+                echo "API health check failed: HTTP $API_CODE"
+                exit 1
+              fi
+            fi
+
+            if [ "$WEBSITE_CHANGED" = true ]; then
+              echo "Testing website..."
+              SITE_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/ || true)
+
+              if [ "$SITE_CODE" != "200" ]; then
+                echo "Website health check failed: HTTP $SITE_CODE"
+                exit 1
+              fi
+            fi
+
+            if [ "$BACKEND_CHANGED" = true ]; then
+              pm2 status
+
+              if ! pm2 status | grep "athlete-backend" | grep -q "online"; then
+                echo "athlete-backend is not online"
+                exit 1
+              fi
             fi
 
             echo "======================================"
             echo "Athlete POV deployment successful"
             echo "======================================"
-
-            pm2 status

@@ -7,3 +7,6 @@ pgdata/
 *.jks
 *.keystore
 **/key.properties
+
+# Production uploads — never commit or delete
+public/uploads/
