@@ -38,30 +38,79 @@ jobs:
 
             APP_DIR="/var/www/athlete-backend"
             WEBSITE_DIR="/home/user/web/athletespov.com/public_html"
+            DEPLOY_MARKER="$APP_DIR/.deployed_sha"
 
             cd "$APP_DIR"
 
-            echo "Recording current commit..."
-            CURRENT_SHA=$(git rev-parse HEAD)
+            # --------------------------------------------------
+            # SAFETY CHECKS
+            # --------------------------------------------------
 
-            echo "Fetching latest code from GitHub..."
-            git fetch origin main
+            if [ ! -f "$APP_DIR/.env" ]; then
+              echo "ERROR: Production .env is missing"
+              exit 1
+            fi
+
+            # Do not allow manual tracked modifications on production.
+            TRACKED_CHANGES=$(git status --porcelain --untracked-files=no)
+
+            if [ -n "$TRACKED_CHANGES" ]; then
+              echo "ERROR: Tracked production files have local changes:"
+              echo "$TRACKED_CHANGES"
+              exit 1
+            fi
+
+            # --------------------------------------------------
+            # FETCH TARGET
+            # --------------------------------------------------
+
+            echo "Fetching latest main branch..."
+            git fetch origin main --prune
 
             TARGET_SHA=$(git rev-parse origin/main)
 
-            echo "Current commit: $CURRENT_SHA"
-            echo "Target commit:  $TARGET_SHA"
+            if [ -f "$DEPLOY_MARKER" ]; then
+              DEPLOYED_SHA=$(cat "$DEPLOY_MARKER")
+            else
+              DEPLOYED_SHA=""
+            fi
 
-            if [ "$CURRENT_SHA" = "$TARGET_SHA" ]; then
-              echo "No new commit to deploy"
+            echo "Target commit:   $TARGET_SHA"
+            echo "Deployed commit: ${DEPLOYED_SHA:-none}"
+
+            if [ "$DEPLOYED_SHA" = "$TARGET_SHA" ]; then
+              echo "Production is already deployed at $TARGET_SHA"
               exit 0
             fi
 
-            echo "Detecting changed files..."
-            CHANGED_FILES=$(git diff --name-only "$CURRENT_SHA" "$TARGET_SHA")
+            # --------------------------------------------------
+            # DETECT CHANGES
+            # --------------------------------------------------
+
+            CURRENT_SHA=$(git rev-parse HEAD)
+
+            echo "Current working-tree commit: $CURRENT_SHA"
+
+            # If this is a new/manual deployment and the working tree
+            # is already at the target, diff against the last deployed SHA.
+            if [ -n "$DEPLOYED_SHA" ]; then
+              DIFF_BASE="$DEPLOYED_SHA"
+            else
+              DIFF_BASE="$CURRENT_SHA"
+            fi
+
+            echo "Detecting changed files between:"
+            echo "  $DIFF_BASE"
+            echo "  $TARGET_SHA"
+
+            CHANGED_FILES=$(git diff --name-only "$DIFF_BASE" "$TARGET_SHA" || true)
 
             echo "Changed files:"
-            echo "$CHANGED_FILES"
+            if [ -n "$CHANGED_FILES" ]; then
+              echo "$CHANGED_FILES"
+            else
+              echo "(none)"
+            fi
 
             WEBSITE_CHANGED=false
             DEPENDENCIES_CHANGED=false
@@ -69,137 +118,219 @@ jobs:
             BACKEND_CHANGED=false
             ADMIN_CHANGED=false
 
-            if echo "$CHANGED_FILES" | grep -qE '^website/'; then
+            # Website source and shared logos
+            if echo "$CHANGED_FILES" | grep -qE '^(website/|logos/)'; then
               WEBSITE_CHANGED=true
             fi
 
+            # Backend dependencies
             if echo "$CHANGED_FILES" | grep -qE '^(package\.json|package-lock\.json)$'; then
               DEPENDENCIES_CHANGED=true
             fi
 
+            # Prisma schema/migrations
             if echo "$CHANGED_FILES" | grep -qE '^prisma/'; then
               PRISMA_CHANGED=true
             fi
 
+            # Backend source
             if echo "$CHANGED_FILES" | grep -qE '^src/'; then
               BACKEND_CHANGED=true
             fi
 
+            # Admin static files
             if echo "$CHANGED_FILES" | grep -qE '^public/admin/'; then
               ADMIN_CHANGED=true
             fi
 
+            # Dependency changes require backend rebuild/restart
             if [ "$DEPENDENCIES_CHANGED" = true ]; then
               BACKEND_CHANGED=true
             fi
 
-            echo "Website changed: $WEBSITE_CHANGED"
+            echo "--------------------------------------"
+            echo "Website changed:      $WEBSITE_CHANGED"
             echo "Dependencies changed: $DEPENDENCIES_CHANGED"
-            echo "Prisma changed: $PRISMA_CHANGED"
-            echo "Backend changed: $BACKEND_CHANGED"
-            echo "Admin changed: $ADMIN_CHANGED"
+            echo "Prisma changed:       $PRISMA_CHANGED"
+            echo "Backend changed:      $BACKEND_CHANGED"
+            echo "Admin changed:        $ADMIN_CHANGED"
+            echo "--------------------------------------"
 
-            if [ "$WEBSITE_CHANGED" = false ] \
-              && [ "$DEPENDENCIES_CHANGED" = false ] \
-              && [ "$PRISMA_CHANGED" = false ] \
-              && [ "$BACKEND_CHANGED" = false ] \
-              && [ "$ADMIN_CHANGED" = false ]; then
-              echo "No deployment work required for this commit"
-              git reset --hard "$TARGET_SHA"
-              exit 0
-            fi
+            # --------------------------------------------------
+            # UPDATE WORKING TREE
+            # --------------------------------------------------
 
-            echo "Updating working tree to target commit..."
+            echo "Updating production working tree..."
             git reset --hard "$TARGET_SHA"
 
-            if [ -s /root/.nvm/nvm.sh ]; then
-              source /root/.nvm/nvm.sh
-              if nvm use 22; then
-                echo "Using Node 22 via NVM"
-              else
-                echo "WARNING: Node 22 not installed in NVM; using system Node $(node --version)"
-              fi
-            else
-              echo "WARNING: NVM not found at /root/.nvm/nvm.sh; using system Node $(node --version)"
+            # --------------------------------------------------
+            # NODE 22
+            # --------------------------------------------------
+
+            if [ ! -s /root/.nvm/nvm.sh ]; then
+              echo "ERROR: NVM is not installed at /root/.nvm/nvm.sh"
+              echo "Athlete POV requires Node 22."
+              exit 1
             fi
 
+            source /root/.nvm/nvm.sh
+
+            if ! nvm use 22 >/dev/null 2>&1; then
+              echo "ERROR: Node 22 is not installed in NVM."
+              exit 1
+            fi
+
+            echo "Using Node:"
+            node --version
+
+            echo "Using npm:"
+            npm --version
+
+            # --------------------------------------------------
+            # DEPENDENCIES
+            # --------------------------------------------------
+
             if [ "$DEPENDENCIES_CHANGED" = true ]; then
-              echo "Running dependency installation..."
+              echo "Installing dependencies..."
               npm ci
             fi
 
-            if [ "$PRISMA_CHANGED" = true ]; then
-              echo "Running Prisma migrations..."
+            # --------------------------------------------------
+            # PRISMA
+            # --------------------------------------------------
+
+            if [ "$DEPENDENCIES_CHANGED" = true ] || [ "$PRISMA_CHANGED" = true ]; then
+              echo "Generating Prisma client..."
               npx prisma generate
+            fi
+
+            if [ "$PRISMA_CHANGED" = true ]; then
+              echo "Applying Prisma production migrations..."
               npx prisma migrate deploy
             fi
 
+            # --------------------------------------------------
+            # BACKEND BUILD
+            # --------------------------------------------------
+
             if [ "$BACKEND_CHANGED" = true ]; then
-              echo "Running backend build..."
+              echo "Building backend..."
               npm run build
 
               echo "Restarting athlete-backend..."
               pm2 restart athlete-backend --update-env
             fi
 
-            if [ "$WEBSITE_CHANGED" = true ]; then
-              echo "Running website deployment..."
-              mkdir -p "$WEBSITE_DIR"
-              rsync -a --delete website/ "$WEBSITE_DIR"/
+            # --------------------------------------------------
+            # WEBSITE
+            # --------------------------------------------------
 
-              echo "Running website logo deployment..."
+            if [ "$WEBSITE_CHANGED" = true ]; then
+              echo "Deploying Athlete POV website..."
+
+              mkdir -p "$WEBSITE_DIR"
+
+              rsync -a --delete \
+                --exclude='.well-known/' \
+                website/ \
+                "$WEBSITE_DIR"/
+
+              echo "Deploying website logos..."
               mkdir -p "$WEBSITE_DIR/logos"
-              rsync -a logos/ "$WEBSITE_DIR/logos"/
+
+              rsync -a \
+                logos/ \
+                "$WEBSITE_DIR/logos"/
 
               echo "Fixing website ownership..."
               chown -R user:user "$WEBSITE_DIR"
             fi
 
+            # --------------------------------------------------
+            # HEALTH CHECKS
+            # --------------------------------------------------
+
             if [ "$BACKEND_CHANGED" = true ]; then
-              echo "Waiting for athlete-backend health check..."
-              ADMIN_OK=false
+
+              echo "Waiting for athlete-backend..."
+
+              BACKEND_OK=false
+
               for i in $(seq 1 30); do
-                ADMIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/admin/login.html || true)
+
+                ADMIN_CODE=$(curl -s \
+                  -o /dev/null \
+                  -w "%{http_code}" \
+                  https://athletespov.com/admin/login.html \
+                  || true)
+
                 if [ "$ADMIN_CODE" = "200" ]; then
-                  ADMIN_OK=true
+                  BACKEND_OK=true
                   break
                 fi
+
                 sleep 2
               done
 
-              if [ "$ADMIN_OK" = false ]; then
-                echo "Admin health check failed"
+              if [ "$BACKEND_OK" = false ]; then
+                echo "ERROR: Admin health check failed"
                 exit 1
               fi
 
               echo "Testing API routing..."
-              API_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/api/ || true)
+
+              API_CODE=$(curl -s \
+                -o /dev/null \
+                -w "%{http_code}" \
+                https://athletespov.com/api/ \
+                || true)
 
               if [ "$API_CODE" != "401" ] && [ "$API_CODE" != "200" ]; then
-                echo "API health check failed: HTTP $API_CODE"
+                echo "ERROR: API health check failed: HTTP $API_CODE"
                 exit 1
               fi
-            fi
 
-            if [ "$WEBSITE_CHANGED" = true ]; then
-              echo "Testing website..."
-              SITE_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://athletespov.com/ || true)
+              echo "API health check passed: HTTP $API_CODE"
 
-              if [ "$SITE_CODE" != "200" ]; then
-                echo "Website health check failed: HTTP $SITE_CODE"
-                exit 1
-              fi
-            fi
+              echo "Checking PM2..."
 
-            if [ "$BACKEND_CHANGED" = true ]; then
               pm2 status
 
               if ! pm2 status | grep "athlete-backend" | grep -q "online"; then
-                echo "athlete-backend is not online"
+                echo "ERROR: athlete-backend is not online"
                 exit 1
               fi
+
             fi
+
+            if [ "$WEBSITE_CHANGED" = true ]; then
+
+              echo "Testing website..."
+
+              SITE_CODE=$(curl -s \
+                -o /dev/null \
+                -w "%{http_code}" \
+                https://athletespov.com/ \
+                || true)
+
+              if [ "$SITE_CODE" != "200" ]; then
+                echo "ERROR: Website health check failed: HTTP $SITE_CODE"
+                exit 1
+              fi
+
+              echo "Website health check passed."
+
+            fi
+
+            # --------------------------------------------------
+            # MARK SUCCESSFUL DEPLOYMENT
+            # --------------------------------------------------
+
+            echo "$TARGET_SHA" > "$DEPLOY_MARKER"
+
+            chmod 600 "$DEPLOY_MARKER"
 
             echo "======================================"
             echo "Athlete POV deployment successful"
+            echo "Commit: $TARGET_SHA"
             echo "======================================"
