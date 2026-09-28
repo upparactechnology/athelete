@@ -15,8 +15,14 @@ async function bootstrap() {
     await prisma.$connect();
     logger.info("Connected to PostgreSQL Database server successfully.");
 
-    // 3. Auto Seed Database if empty
-    await seedDatabase();
+    // 3. Auto Seed Database if empty (development/test only).
+    // Production NEVER auto-seeds: demo records must not be created on a
+    // live VPS no matter what state the database is in.
+    if (env.NODE_ENV === 'production') {
+      logger.info("Production environment detected; database auto-seeding is disabled.");
+    } else {
+      await seedDatabase();
+    }
 
     // 4. Start listening
     const server = app.listen(env.PORT, () => {

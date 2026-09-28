@@ -1,6 +1,14 @@
 import { prisma } from './prisma.js';
+import { env } from './env.js';
 
 export async function seedDatabase() {
+  // Defense-in-depth: even if a future caller invokes the seeder in
+  // production, refuse to insert demo records there.
+  if (env.NODE_ENV === 'production') {
+    console.log("Production environment detected; database auto-seeding is disabled. Refusing to seed.");
+    return;
+  }
+
   const [userCount, partnerCount, venueCount] = await Promise.all([
     prisma.user.count(),
     prisma.partner.count(),
