@@ -4,8 +4,9 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.13:4000/api';
-  static const String fallbackUrl = 'http://192.168.29.240:4000/api';
+  // Production backend. All clients (including Play release builds) use HTTPS.
+  static const String baseUrl = 'https://athletespov.com/api';
+  static const String fallbackUrl = 'https://athletespov.com/api';
 
   static String _activeUrl = baseUrl;
 

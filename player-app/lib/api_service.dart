@@ -4,9 +4,9 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Use 10.0.2.2 for Android Emulator to connect to localhost, fallback to localhost for desktop/web
-  static const String baseUrl = 'http://192.168.1.13:4000/api';
-  static const String fallbackUrl = 'http://172.19.144.1:4000/api';
+  // Production backend. All clients (including Play release builds) use HTTPS.
+  static const String baseUrl = 'https://athletespov.com/api';
+  static const String fallbackUrl = 'https://athletespov.com/api';
 
   static String _activeUrl = baseUrl;
 

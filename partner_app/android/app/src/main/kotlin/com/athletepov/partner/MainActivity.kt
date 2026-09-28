@@ -1,4 +1,4 @@
-package com.example.partner_app
+package com.athletepov.partner
 
 import io.flutter.embedding.android.FlutterActivity
 

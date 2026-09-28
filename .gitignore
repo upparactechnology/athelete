@@ -3,3 +3,7 @@ dist/
 pgdata/
 .env
 *.log
+# Android release signing — never commit keystores or passwords
+*.jks
+*.keystore
+**/key.properties
