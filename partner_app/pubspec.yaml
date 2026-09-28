@@ -46,6 +46,9 @@ dependencies:
   url_launcher: ^6.3.0
   webview_flutter: ^4.9.0
 
+dependency_overrides:
+  google_sign_in_android: 7.2.7
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
