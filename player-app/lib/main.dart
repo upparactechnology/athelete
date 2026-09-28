@@ -216,6 +216,7 @@ Widget _buildPolicySection(String title, String description, {List<String>? bull
 }
 
 Widget _buildVenueImage(String imageStr, {required double height, double? width, required BoxFit fit}) {
+  imageStr = ApiService.resolveMediaUrl(imageStr);
   if (imageStr.startsWith('data:image') || (!imageStr.startsWith('http') && !imageStr.startsWith('/') && imageStr.length > 100)) {
     try {
       String base64Body = imageStr;
@@ -250,6 +251,32 @@ Widget _buildVenueImage(String imageStr, {required double height, double? width,
       fit: fit,
     ),
   );
+}
+
+/// Accurate venue distance label from real GPS coordinates.
+///
+/// Prefers an on-device straight-line computation between the user's position
+/// and the venue's database coordinates. Falls back to the backend `distance`
+/// field; returns null when neither is available so callers show nothing
+/// instead of inventing a placeholder.
+String? venueDistanceLabel(Map<String, dynamic> venue, double? userLat, double? userLng) {
+  final vLat = double.tryParse(venue['latitude']?.toString() ?? '');
+  final vLng = double.tryParse(venue['longitude']?.toString() ?? '');
+  if (userLat != null && userLng != null && vLat != null && vLng != null) {
+    final meters = Geolocator.distanceBetween(userLat, userLng, vLat, vLng);
+    if (meters < 1000) return '${meters.round()} m';
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+  final backend = venue['distance']?.toString();
+  if (backend != null && backend.isNotEmpty && backend != 'null') return '$backend km';
+  return null;
+}
+
+/// Database closing-time label for a venue, or null when not stored.
+String? venueClosingLabel(Map<String, dynamic> venue) {
+  final closing = venue['closing_time']?.toString().trim();
+  if (closing == null || closing.isEmpty) return null;
+  return 'Open until $closing';
 }
 
 // Theme extension for context-aware styling
@@ -357,7 +384,7 @@ class _AthletePOVPlayerAppState extends State<AthletePOVPlayerApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: "Athlete's POV",
+      title: "Athletespov",
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
@@ -569,6 +596,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await ApiService.verifyOtp(_phoneController.text.trim(), _otpController.text.trim());
       if (response['success'] == true) {
+        WebSocketSyncManager.connect();
         if (!mounted) return;
         try {
           final profileRes = await ApiService.getProfile();
@@ -616,6 +644,12 @@ class _LoginScreenState extends State<LoginScreen> {
       
       final GoogleSignInAccount account = await GoogleSignIn.instance.authenticate();
 
+      final String? idToken = account.authentication.idToken;
+
+      if (idToken == null || idToken.isEmpty) {
+        throw Exception('Google did not return an ID token');
+      }
+
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -647,16 +681,14 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       );
 
-      final response = await ApiService.googleLogin(
-        account.email, 
-        account.displayName ?? 'Google User'
-      );
+      final response = await ApiService.googleLogin(idToken);
       
       if (mounted) {
         Navigator.pop(context);
       }
 
       if (response['success'] == true) {
+        WebSocketSyncManager.connect();
         if (!mounted) return;
         try {
           final profileRes = await ApiService.getProfile();
@@ -1422,6 +1454,11 @@ class _HomeTabState extends State<HomeTab> {
   final FocusNode _searchFocusNode = FocusNode();
   bool _isSearchFocused = false;
 
+  /// Real device GPS position (saved by location detection). Used for
+  /// accurate distances instead of the selected-city center fallback.
+  double? _userLat;
+  double? _userLng;
+
   // Filter params
   double _maxPrice = 5000;
   double _minRating = 0.0;
@@ -1507,11 +1544,18 @@ class _HomeTabState extends State<HomeTab> {
     _loadNotifications();
     setState(() => _isLoading = true);
     final bannerResponse = await ApiService.getBanners();
+    // Prefer the real device position; city center is only a fallback so
+    // distances reflect the user, not the city pin.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _userLat = prefs.getDouble('user_latitude');
+      _userLng = prefs.getDouble('user_longitude');
+    } catch (_) {}
     final coords = _cityCoords[_selectedCity] ?? {"lat": 23.03, "lng": 72.58};
     final venueResponse = await ApiService.getVenues(
       sport: _selectedSport == "All" ? null : _selectedSport,
-      lat: coords['lat'],
-      lng: coords['lng'],
+      lat: _userLat ?? coords['lat'],
+      lng: _userLng ?? coords['lng'],
     );
     
     // Apply client-side filters
@@ -1741,7 +1785,11 @@ class _HomeTabState extends State<HomeTab> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => ViewAllVenuesScreen(venues: _venues),
+                              builder: (context) => ViewAllVenuesScreen(
+                                venues: _venues,
+                                userLat: _userLat,
+                                userLng: _userLng,
+                              ),
                             ),
                           );
                         },
@@ -2051,7 +2099,11 @@ class _HomeTabState extends State<HomeTab> {
                                   const Icon(Icons.location_on_rounded, color: Colors.grey, size: 13),
                                   const SizedBox(width: 4),
                                   Text(
-                                    "${venue['address']?.toString().split(',').first ?? _selectedCity.split(',')[0]} • ${venue['distance']?.toString() ?? '0.8'} km",
+                                    () {
+                                      final addr = venue['address']?.toString().split(',').first ?? _selectedCity.split(',')[0];
+                                      final dist = venueDistanceLabel(venue, _userLat, _userLng);
+                                      return dist == null ? addr : '$addr • $dist';
+                                    }(),
                                     style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
                                   ),
                                 ],
@@ -2085,7 +2137,7 @@ class _HomeTabState extends State<HomeTab> {
                         const SizedBox(width: 12),
                         const Icon(Icons.access_time_rounded, color: Colors.grey, size: 14),
                         const SizedBox(width: 4),
-                        Text("Open until 11 PM", style: GoogleFonts.sora(color: subtextCol, fontSize: 12)),
+                        Text(venueClosingLabel(venue) ?? 'Hours unavailable', style: GoogleFonts.sora(color: subtextCol, fontSize: 12)),
                         const SizedBox(width: 12),
                         const Icon(Icons.local_parking_rounded, color: Colors.grey, size: 14),
                         const SizedBox(width: 4),
@@ -2266,6 +2318,10 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
   int _currentImageIndex = 0;
   String _supportPhone = "9427961426";
 
+  /// Real device position for the detail-screen distance.
+  double? _userLat;
+  double? _userLng;
+
   @override
   void initState() {
     super.initState();
@@ -2303,6 +2359,11 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
     setState(() => _isLoading = true);
     final detailResponse = await ApiService.getVenueDetails(widget.venueId);
     final slotsResponse = await ApiService.getSlots(widget.venueId, _selectedDate);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _userLat = prefs.getDouble('user_latitude');
+      _userLng = prefs.getDouble('user_longitude');
+    } catch (_) {}
     
     // Check favorite status
     final token = await ApiService.getToken();
@@ -2372,6 +2433,9 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
     // Slots status check
     bool isClosed = _venue['status'] == 'suspended';
     bool allSlotsBooked = _slots.isNotEmpty && _slots.every((s) => s['status'] == 'booked');
+
+    // Accurate straight-line distance from the real device position.
+    final String? detailDistance = venueDistanceLabel(_venue, _userLat, _userLng);
 
     return Scaffold(
       backgroundColor: const Color(0xFF090B10),
@@ -2564,7 +2628,9 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                 const Icon(Icons.location_on_rounded, color: AppColors.pink, size: 14),
                                 const SizedBox(width: 4),
                                 Text(
-                                  "2.4 km away",
+                                  detailDistance == null
+                                      ? 'Distance unavailable'
+                                      : '$detailDistance away',
                                   style: GoogleFonts.sora(color: subtextCol, fontSize: 13, fontWeight: FontWeight.w500),
                                 ),
                               ],
@@ -2593,7 +2659,7 @@ class _VenueDetailScreenState extends State<VenueDetailScreen> {
                                     CircleAvatar(radius: 4, backgroundColor: isClosed ? Colors.red : const Color(0xFF3DDC84)),
                                     const SizedBox(width: 8),
                                     Text(
-                                      isClosed ? "Suspended / Closed" : "Open until 11:00 PM",
+                                      isClosed ? "Suspended / Closed" : (venueClosingLabel(_venue) ?? 'Hours unavailable'),
                                       style: GoogleFonts.sora(color: isClosed ? Colors.redAccent : const Color(0xFF3DDC84), fontSize: 13, fontWeight: FontWeight.bold),
                                     ),
                                   ],
@@ -3720,6 +3786,7 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
     try {
       final res = await ApiService.verifyOtp(email, otp);
       if (res['success'] == true) {
+        WebSocketSyncManager.connect();
         AppToast.show(context, "Login Successful!");
         Navigator.pop(context);
         widget.onSuccess();
@@ -3745,12 +3812,16 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
       
       final GoogleSignInAccount account = await GoogleSignIn.instance.authenticate();
 
-      final res = await ApiService.googleLogin(
-        account.email, 
-        account.displayName ?? 'Google User'
-      );
+      final String? idToken = account.authentication.idToken;
+
+      if (idToken == null || idToken.isEmpty) {
+        throw Exception('Google did not return an ID token');
+      }
+
+      final res = await ApiService.googleLogin(idToken);
 
       if (res['success'] == true) {
+        WebSocketSyncManager.connect();
         AppToast.show(context, "Login Successful!");
         Navigator.pop(context);
         widget.onSuccess();
@@ -3940,6 +4011,26 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
 // -------------------------------------------------------------
 // Checkout & Payment Screen
 // -------------------------------------------------------------
+
+/// How a payment gateway failure callback should be interpreted.
+///
+/// Never collapse these into one "payment failed" bucket: only
+/// [userCancelled] and [paymentFailed] are *known* outcomes that justify
+/// releasing the held slot. [uncertain] outcomes (timeout / network /
+/// unknown) may still settle server-side, so the backend reconciliation,
+/// webhook and expiry flows stay in charge of the truth.
+enum GatewayFailureKind {
+  /// Razorpay sheet dismissed by the athlete — nothing was paid.
+  userCancelled,
+
+  /// The gateway explicitly reported a failed transaction.
+  paymentFailed,
+
+  /// Timeout / network error / unknown result — the payment may have gone
+  /// through. Never treated as a permanent failure.
+  uncertain,
+}
+
 class CheckoutScreen extends StatefulWidget {
   final Map<String, dynamic> venue;
   final Map<String, dynamic> slot;
@@ -3953,12 +4044,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   final _couponController = TextEditingController();
   bool _payOnline = true;
   bool _isLoading = false;
-  double _discount = 0.0;
+
+  /// Coupon code is stored only; the discount is calculated server-side.
   String? _appliedCouponCode;
 
   late Razorpay _razorpay;
   String? _currentBookingId;
   String? _currentOrderId;
+
+  /// Server booking row created by this checkout. Kept so a retry reuses the
+  /// SAME booking/order instead of creating a duplicate one.
+  Map<String, dynamic>? _lastBooking;
+
+  /// Guards against duplicate verify/confirmation from repeated callbacks.
+  bool _confirmationShown = false;
 
   @override
   void initState() {
@@ -3977,109 +4076,694 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    if (_confirmationShown) return;
     final bookingId = _currentBookingId;
+    final paymentId = response.paymentId;
+    // Never invent an order ID: prefer the server-issued one we stored.
     final orderId = _currentOrderId ?? response.orderId;
-    if (bookingId == null || orderId == null) return;
-
-    setState(() => _isLoading = true);
-    final verifyRes = await ApiService.verifyPayment(bookingId, orderId, response.paymentId ?? '');
-    if (verifyRes['success'] == true) {
-      final finalBooking = verifyRes['data'];
-      finalBooking['slot'] = widget.slot;
-      finalBooking['venue'] = widget.venue;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => ConfirmationScreen(booking: finalBooking),
-        ),
-      );
-    } else {
-      AppToast.show(context, "Payment verification failed", isError: true);
+    final signature = response.signature;
+    if (!mounted) return;
+    if (bookingId == null || orderId == null || paymentId == null || paymentId.isEmpty) {
+      AppToast.show(context, 'Payment response was incomplete. Please retry — you will not be charged twice.', isError: true);
+      return;
     }
-    setState(() => _isLoading = false);
+    // Real Razorpay payments always carry a signature; the hardened backend
+    // rejects verification without it.
+    if (signature == null || signature.isEmpty) {
+      AppToast.show(context, 'Payment signature missing. Please retry payment.', isError: true);
+      return;
+    }
+    await _verifyAndConfirm(
+      bookingId: bookingId,
+      orderId: orderId,
+      paymentId: paymentId,
+      signature: signature,
+      isMock: false,
+    );
   }
 
-  void _handlePaymentError(PaymentFailureResponse response) async {
-    final bookingId = _currentBookingId;
-    if (bookingId != null) {
-      setState(() => _isLoading = true);
-      await ApiService.cancelBooking(bookingId);
-      setState(() => _isLoading = false);
+  /// Single shared verification path for real and mock payments.
+  /// The backend response is authoritative: the ticket opens only after the
+  /// server answers with `status == CONFIRMED`. Safe against duplicate
+  /// callbacks via [_confirmationShown].
+  ///
+  /// Failure modes are deliberately NOT collapsed into "payment failed":
+  /// - transport error/timeout -> the result is unknown, offer a server check;
+  /// - `BOOKING_EXPIRED`       -> the session died, never confirm;
+  /// - `PAYMENT_REUSED`        -> already processed elsewhere, check status;
+  /// - `VALIDATION_ERROR`      -> verification rejected by the server.
+  Future<void> _verifyAndConfirm({
+    required String bookingId,
+    required String orderId,
+    required String paymentId,
+    String? signature,
+    required bool isMock,
+  }) async {
+    if (_confirmationShown || !mounted) return;
+    setState(() => _isLoading = true);
+
+    Map<String, dynamic>? verifyRes;
+    Object? transportError;
+    try {
+      verifyRes = await ApiService.verifyPayment(
+        bookingId,
+        orderId,
+        paymentId,
+        signature: signature,
+      ).timeout(const Duration(seconds: 25));
+    } on TimeoutException {
+      transportError = 'timeout';
+    } catch (e) {
+      transportError = e;
+    } finally {
+      if (mounted && !_confirmationShown) setState(() => _isLoading = false);
     }
-    AppToast.show(context, "Payment Failed/Cancelled: ${response.message ?? ''}", isError: true);
+    if (!mounted) return;
+
+    // We never reached an answer: the backend may still have the payment
+    // (webhook/reconciliation). Do NOT cancel, do NOT claim failure.
+    if (transportError != null) {
+      _showStatusDialog(
+        'Payment status unknown',
+        transportError == 'timeout'
+            ? 'The status check timed out, so this screen cannot tell you the outcome yet. The server decides — open Check status to read the booking state.'
+            : 'A network error interrupted the status check, so this screen cannot tell you the outcome yet. The server decides — open Check status to read the booking state.',
+      );
+      return;
+    }
+
+    final res = verifyRes!;
+    if (res['success'] == true) {
+      final data = res['data'];
+      if (data is! Map<String, dynamic>) {
+        _showStatusDialog(
+          'Payment verified, details missing',
+          'The server accepted the payment but returned no booking details. Open Check status to read the real booking state.',
+        );
+        return;
+      }
+      final serverStatus = data['status']?.toString();
+      if (serverStatus != 'CONFIRMED') {
+        // Never claim a success the server did not report.
+        _showStatusDialog(
+          'Payment not confirmed',
+          serverStatus == 'PENDING'
+              ? 'The payment was recorded but the booking is still Payment Pending. Open Check status to refresh it from the server.'
+              : 'The server reports booking status $serverStatus. Open Check status to see what happened to your slot.',
+        );
+        return;
+      }
+      _confirmationShown = true;
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => ConfirmationScreen(
+            booking: _withCheckoutContext(data),
+            isTestPayment: isMock,
+          ),
+        ),
+      );
+      return;
+    }
+
+    final code = res['error']?['code']?.toString();
+    final serverMessage = res['error']?['message']?.toString() ?? res['message']?.toString();
+    switch (code) {
+      case 'BOOKING_EXPIRED':
+        _showStatusDialog(
+          'Booking session expired',
+          'The booking deadline passed before the payment could be confirmed, so it was not confirmed. Open Check status to see whether the slot was released.',
+          offerCheck: true,
+        );
+        return;
+      case 'PAYMENT_REUSED':
+        _showStatusDialog(
+          'Payment already processed',
+          'This payment was already processed by the server. Open Check status to see the booking it belongs to.',
+        );
+        return;
+      case 'VALIDATION_ERROR':
+      case null:
+        AppToast.show(
+          context,
+          isMock
+              ? 'Test payment failed${serverMessage != null ? ': $serverMessage' : ''}.'
+              : 'Payment verification rejected${serverMessage != null ? ': $serverMessage' : ''}. Your booking was not confirmed.',
+          isError: true,
+        );
+        _showStatusDialog(
+          'Verification rejected',
+          'The server did not verify this payment, so nothing was confirmed. ${serverMessage ?? ''} Open Check status to read the booking state.'.trim(),
+        );
+        return;
+      default:
+        _showStatusDialog(
+          'Payment not confirmed',
+          '${serverMessage ?? 'The server could not confirm this payment.'} Open Check status to read the booking state.',
+        );
+    }
+  }
+
+  /// Attaches the checkout's venue/slot context used by the ticket screen.
+  Map<String, dynamic> _withCheckoutContext(Map<String, dynamic> booking) {
+    final merged = Map<String, dynamic>.from(booking);
+    merged['slot'] = widget.slot;
+    merged['venue'] = widget.venue;
+    return merged;
+  }
+
+  /// Authoritative booking row from `GET /bookings` — the only source the app
+  /// trusts for a booking status. Returns null when it cannot be fetched.
+  Future<Map<String, dynamic>?> _fetchServerBooking() async {
+    final bookingId = _currentBookingId;
+    if (bookingId == null || bookingId.isEmpty) return null;
+    try {
+      final res = await ApiService.getBookings().timeout(const Duration(seconds: 20));
+      if (res['success'] != true) return null;
+      final rows = res['data'];
+      if (rows is! List) return null;
+      for (final row in rows) {
+        if (row is Map && row['booking_id']?.toString() == bookingId) {
+          return Map<String, dynamic>.from(row);
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Recovery/refresh path: reads the booking state from the server and
+  /// renders exactly what the server says (confirm, keep pending, or report
+  /// cancelled/expired). It never guesses and never cancels anything.
+  Future<void> _recoverFromServerStatus() async {
+    if (!mounted || _confirmationShown) return;
+    setState(() => _isLoading = true);
+    Map<String, dynamic>? server;
+    try {
+      server = await _fetchServerBooking();
+    } finally {
+      if (mounted && !_confirmationShown) setState(() => _isLoading = false);
+    }
+    if (!mounted) return;
+    if (server == null) {
+      AppToast.show(context, 'Could not reach the server. Please refresh/check My Bookings.', isError: true);
+      return;
+    }
+    final status = server['status']?.toString() ?? 'PENDING';
+    if (status == 'CONFIRMED') {
+      _confirmationShown = true;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => ConfirmationScreen(booking: _withCheckoutContext(server!))),
+      );
+      return;
+    }
+    if (status == 'CANCELLED' || status == 'EXPIRED') {
+      // Settled server-side: a brand new booking may be created again.
+      _currentBookingId = null;
+      _currentOrderId = null;
+      _lastBooking = null;
+    }
+    _showStatusDialog(_statusTitle(status), _statusMessage(status));
+  }
+
+  String _statusTitle(String status) {
+    switch (status) {
+      case 'CONFIRMED':
+        return 'Booking confirmed';
+      case 'CANCELLED':
+        return 'Booking cancelled';
+      case 'EXPIRED':
+        return 'Booking expired';
+      case 'PENDING':
+        return 'Payment pending';
+      default:
+        return 'Booking status: $status';
+    }
+  }
+
+  String _statusMessage(String status) {
+    switch (status) {
+      case 'PENDING':
+        return 'The server still shows this booking as Payment Pending — it is reserved but not confirmed. Either the payment settles (verification/webhook) or the deadline passes and the booking expires with the slot released.';
+      case 'CANCELLED':
+        return 'The server shows this booking as Cancelled and its slot released.';
+      case 'EXPIRED':
+        return 'The payment deadline passed, so the booking expired and the slot was released.';
+      default:
+        return 'The server reports status $status for this booking.';
+    }
+  }
+
+  /// Dialog offering a server-side refresh instead of guessing locally.
+  void _showStatusDialog(String title, String message, {bool offerCheck = true}) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(ctx).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(title, style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 17)),
+        content: Text(message, style: GoogleFonts.sora(fontSize: 13, height: 1.4)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Close', style: GoogleFonts.sora(color: Colors.grey)),
+          ),
+          if (offerCheck)
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _recoverFromServerStatus();
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
+              child: Text('Check status', style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Splits a gateway failure into "known failure" vs "unknown outcome".
+  /// Unknown outcomes must never be reported as a permanent payment failure.
+  GatewayFailureKind _classifyGatewayFailure(String rawMessage) {
+    final msg = rawMessage.toLowerCase().trim();
+    if (msg.isEmpty) return GatewayFailureKind.uncertain;
+    if (msg.contains('cancel') || msg.contains('dismiss')) return GatewayFailureKind.userCancelled;
+    const uncertainSignals = [
+      'timeout',
+      'timed out',
+      'network',
+      'connection',
+      'internet',
+      'unknown',
+      'interrupted',
+      'no response',
+      'socket',
+      'try again',
+    ];
+    for (final signal in uncertainSignals) {
+      if (msg.contains(signal)) return GatewayFailureKind.uncertain;
+    }
+    return GatewayFailureKind.paymentFailed;
+  }
+
+  /// After a DEFINITE payment failure (or the athlete closing the payment
+  /// sheet) ask the server to release the held slot. The response — not the
+  /// local state — decides what the user is told:
+  /// - cancelled + slot available -> success message;
+  /// - `NOT_PENDING`              -> report the server's current status;
+  /// - network/timeout/other      -> never claim the release happened; the
+  ///   backend expiry job remains the safety mechanism.
+  Future<void> _releaseBookingAfterPaymentFailure(String detail, {required GatewayFailureKind kind}) async {
+    final prefix = kind == GatewayFailureKind.userCancelled ? 'Payment cancelled' : 'Payment failed';
+    final bookingId = _currentBookingId;
+    if (!mounted) return;
+    if (bookingId == null || bookingId.isEmpty) {
+      AppToast.show(context, '$prefix. No booking was created, so nothing had to be released.', isError: true);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      Map<String, dynamic> res;
+      try {
+        res = await ApiService.cancelBooking(bookingId, pendingOnly: true)
+            .timeout(const Duration(seconds: 20));
+      } catch (e) {
+        // Timeout / network failure: the request may or may not have landed.
+        // Never claim success, never release the slot locally, never create
+        // another booking automatically.
+        if (!mounted) return;
+        AppToast.show(
+          context,
+          '$prefix. We could not release the booking immediately. Please refresh/check My Bookings.',
+          isError: true,
+        );
+        return;
+      }
+      if (!mounted) return;
+
+      if (res['success'] == true) {
+        final data = res['data'];
+        final bookingStatus = data is Map ? data['bookingStatus']?.toString() : null;
+        final slotStatus = data is Map ? data['slotStatus']?.toString() : null;
+        if (bookingStatus == 'CANCELLED') {
+          // Confirmed by the server: the booking is gone and the slot free.
+          _currentBookingId = null;
+          _currentOrderId = null;
+          _lastBooking = null;
+          AppToast.show(
+            context,
+            slotStatus == 'available'
+                ? '$prefix. Booking cancelled and slot released.'
+                : '$prefix. Booking cancelled — refresh My Bookings for the slot status.',
+          );
+        } else {
+          AppToast.show(
+            context,
+            '$prefix. We could not release the booking immediately. Please refresh/check My Bookings.',
+            isError: true,
+          );
+        }
+        return;
+      }
+
+      final code = res['error']?['code']?.toString();
+      final serverStatus = res['error']?['details']?['status']?.toString();
+      if (code == 'NOT_PENDING') {
+        if (serverStatus == 'CANCELLED' || serverStatus == 'EXPIRED') {
+          _currentBookingId = null;
+          _currentOrderId = null;
+          _lastBooking = null;
+          AppToast.show(
+            context,
+            serverStatus == 'EXPIRED'
+                ? '$prefix. The booking had already expired and the slot was released.'
+                : '$prefix. Booking cancelled and slot released.',
+          );
+        } else if (serverStatus == 'CONFIRMED') {
+          AppToast.show(
+            context,
+            'The gateway reported a failure, but the server shows this booking as CONFIRMED. Check My Bookings before paying again.',
+            isError: true,
+          );
+        } else {
+          AppToast.show(
+            context,
+            '$prefix. We could not release the booking immediately. Please refresh/check My Bookings.',
+            isError: true,
+          );
+        }
+        return;
+      }
+
+      AppToast.show(
+        context,
+        '$prefix. We could not release the booking immediately. Please refresh/check My Bookings.',
+        isError: true,
+      );
+    } finally {
+      if (mounted && !_confirmationShown) setState(() => _isLoading = false);
+    }
+  }
+
+  /// Razorpay reported a failure (or the athlete closed the sheet).
+  ///
+  /// The three outcomes are handled differently — see [GatewayFailureKind]:
+  /// - user closed / gateway-reported failure -> ask the server to release
+  ///   the held slot and report ONLY what the server answered;
+  /// - timeout / network / unknown            -> the payment may still settle,
+  ///   so nothing is cancelled here and the server status is offered instead.
+  void _handlePaymentError(PaymentFailureResponse response) async {
+    if (!mounted) return;
+    final detail = (response.message ?? '').trim();
+    final kind = _classifyGatewayFailure(detail);
+
+    if (kind == GatewayFailureKind.uncertain) {
+      _showStatusDialog(
+        'Payment status unclear',
+        detail.isEmpty
+            ? 'The gateway did not report a definite result, so nothing was cancelled. Open Check status to read the booking state from the server.'
+            : 'The gateway reported "$detail". Your payment may still settle, so nothing was cancelled here — open Check status to read the booking state from the server.',
+      );
+      return;
+    }
+
+    await _releaseBookingAfterPaymentFailure(detail, kind: kind);
   }
 
   void _handleExternalWallet(ExternalWalletResponse response) {
     AppToast.show(context, "External wallet selected: ${response.walletName}");
   }
 
-  void _applyCoupon() async {
+  /// Dev-only: pick the simulated outcome for a mock payment. Real Razorpay
+  /// is never opened in mock mode. Returning null == "closed the sheet".
+  Future<bool?> _askMockPaymentOutcome() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text("Test payment (mock mode)", style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 17)),
+          content: Text(
+            "Mock payments are enabled in development: no Razorpay window is opened and no money moves.\n\n"
+            "Success verifies the booking server-side (PENDING → CONFIRMED). "
+            "Failure cancels it and releases the slot (PENDING → CANCELLED).",
+            style: GoogleFonts.sora(fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, null),
+              child: Text("Dismiss", style: GoogleFonts.sora(color: Colors.grey)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text("Simulate failure", style: GoogleFonts.sora(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              child: Text("Simulate success", style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _applyCoupon() {
     final code = _couponController.text.trim();
     if (code.isEmpty) return;
-    setState(() {
-      _discount = double.parse(widget.slot['price'].toString()) * 0.1; // 10% mock discount
-      _appliedCouponCode = code;
-    });
-    AppToast.show(context, 'Coupon "$code" applied! 10% Discount');
+    // Never price coupons locally: the code is submitted with the booking
+    // and the backend coupon engine is the sole authority on discounts.
+    setState(() => _appliedCouponCode = code);
+    AppToast.show(context, 'Coupon "$code" saved — the exact discount is calculated by the server at booking.');
   }
 
   void _processPayment() async {
+    if (_isLoading || _confirmationShown) return;
     setState(() => _isLoading = true);
-
-    final mode = _payOnline ? "online" : "pay_at_venue";
-    final bookingRes = await ApiService.createBooking(
-      widget.venue['venue_id'],
-      widget.slot['slot_id'],
-      mode,
-      couponCode: _appliedCouponCode,
-    );
-
-    if (bookingRes['success'] != true) {
-      setState(() => _isLoading = false);
-      AppToast.show(context, "Failed to lock slot and create booking.", isError: true);
-      return;
-    }
-
-    final booking = bookingRes['data'];
-    final bookingId = booking['booking_id'];
-    _currentBookingId = bookingId;
-
-    final payInit = await ApiService.initiatePayment(bookingId);
-    final orderId = payInit['data']?['orderId'] ?? 'order_${MathUtils.randomString(12)}';
-    final razorpayKey = payInit['data']?['key'] ?? 'rzp_test_Lp542L8X1v9n5R';
-    _currentOrderId = orderId;
-
-    // Load profile for prefill info
-    String email = "athlete@example.com";
-    String phone = "9999999999";
     try {
-      final profile = await ApiService.getProfile();
-      if (profile['success'] == true && profile['data'] != null) {
-        email = profile['data']['email'] ?? email;
-        phone = profile['data']['phone_number'] ?? phone;
+      Map<String, dynamic> booking;
+      if (_currentBookingId != null && _lastBooking != null) {
+        // Retry after an unsettled/failed attempt: reuse the booking (and its
+        // pending order) this checkout already created. Never open a second
+        // booking for the same slot automatically.
+        booking = _lastBooking!;
+      } else {
+        final mode = _payOnline ? "online" : "pay_at_venue";
+        late final Map<String, dynamic> bookingRes;
+        try {
+          bookingRes = await ApiService.createBooking(
+            widget.venue['venue_id'],
+            widget.slot['slot_id'],
+            mode,
+            couponCode: _appliedCouponCode,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          AppToast.show(context, 'Could not create booking: $e', isError: true);
+          return;
+        }
+
+        if (bookingRes['success'] != true) {
+          if (!mounted) return;
+          final msg = bookingRes['error']?['message'] ?? bookingRes['message'] ?? 'Failed to lock slot and create booking.';
+          AppToast.show(context, msg.toString(), isError: true);
+          return;
+        }
+
+        final bookingDyn = bookingRes['data'];
+        if (bookingDyn is! Map<String, dynamic>) {
+          if (!mounted) return;
+          AppToast.show(context, 'Booking response was invalid. Please retry.', isError: true);
+          return;
+        }
+        booking = bookingDyn;
+        final newBookingId = booking['booking_id']?.toString();
+        if (newBookingId == null || newBookingId.isEmpty) {
+          if (!mounted) return;
+          AppToast.show(context, 'Booking response was invalid. Please retry.', isError: true);
+          return;
+        }
+        _currentBookingId = newBookingId;
+        _lastBooking = booking;
       }
-    } catch (_) {}
 
-    setState(() => _isLoading = false);
-
-    final options = {
-      'key': razorpayKey,
-      'amount': (double.parse(booking['online_amount'].toString()) * 100).toInt(),
-      'name': 'Athlete App',
-      'description': widget.venue['name'] ?? 'Booking Payment',
-      'order_id': orderId,
-      'prefill': {
-        'contact': phone,
-        'email': email,
-      },
-      'external': {
-        'wallets': ['paytm']
+      final bookingId = booking['booking_id']?.toString();
+      if (bookingId == null || bookingId.isEmpty) {
+        if (!mounted) return;
+        AppToast.show(context, 'Booking response was invalid. Please retry.', isError: true);
+        return;
       }
-    };
+      _currentBookingId = bookingId;
 
-    try {
-      _razorpay.open(options);
-    } catch (e) {
-      AppToast.show(context, "Error opening Razorpay: $e", isError: true);
+      // Free / zero-payment bookings are confirmed immediately, no gateway.
+      if (booking['status'] == 'CONFIRMED') {
+        _confirmationShown = true;
+        final finalBooking = Map<String, dynamic>.from(booking);
+        finalBooking['slot'] = widget.slot;
+        finalBooking['venue'] = widget.venue;
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => ConfirmationScreen(booking: finalBooking),
+          ),
+        );
+        return;
+      }
+
+      late final Map<String, dynamic> payInit;
+      try {
+        payInit = await ApiService.initiatePayment(bookingId);
+      } catch (e) {
+        if (!mounted) return;
+        AppToast.show(context, 'Could not start payment: $e. You can retry.', isError: true);
+        return;
+      }
+      if (payInit['success'] != true) {
+        if (!mounted) return;
+        final msg = payInit['error']?['message'] ?? payInit['message'] ?? 'Could not start payment. You can retry.';
+        final code = payInit['error']?['code']?.toString();
+        if (code == 'BOOKING_EXPIRED' || code == 'ILLEGAL_STATUS_TRANSITION' || code == 'NOT_FOUND') {
+          // This booking can never be paid again (expired/cancelled/gone):
+          // drop it so the next attempt may create a fresh booking.
+          _currentBookingId = null;
+          _currentOrderId = null;
+          _lastBooking = null;
+        }
+        AppToast.show(context, msg.toString(), isError: true);
+        return;
+      }
+
+      final payData = payInit['data'];
+      final data = payData is Map<String, dynamic> ? payData : <String, dynamic>{};
+
+      if (data['alreadyPaid'] == true) {
+        // Backend reports an earlier successful payment — read the booking
+        // back from the server instead of trusting a stale local copy.
+        final server = await _fetchServerBooking();
+        if (!mounted) return;
+        if (server != null && server['status'] == 'CONFIRMED') {
+          _confirmationShown = true;
+          _lastBooking = server;
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => ConfirmationScreen(booking: _withCheckoutContext(server)),
+            ),
+          );
+        } else {
+          _showStatusDialog(
+            'Payment already recorded',
+            server == null
+                ? 'The server reports this payment as already processed, but the booking could not be loaded. Open Check status to read it.'
+                : _statusMessage(server['status']?.toString() ?? 'PENDING'),
+          );
+        }
+        return;
+      }
+
+      final serverOrderId = data['orderId']?.toString();
+      if (serverOrderId == null || serverOrderId.isEmpty) {
+        if (!mounted) return;
+        AppToast.show(context, 'Payment order was not created. Please retry.', isError: true);
+        return;
+      }
+      _currentOrderId = serverOrderId;
+
+      // Local mock mode (backend dev flag only): never open real Razorpay.
+      // The simulated outcome is chosen explicitly so both branches can be
+      // exercised: success -> PENDING -> verified -> CONFIRMED, and failure
+      // -> PENDING -> CANCELLED with the slot released server-side.
+      if (data['mock'] == true) {
+        final outcome = await _askMockPaymentOutcome();
+        if (!mounted) return;
+        if (outcome == null) {
+          // Dismissed = the athlete closed the payment sheet.
+          await _releaseBookingAfterPaymentFailure(
+            'Payment sheet dismissed',
+            kind: GatewayFailureKind.userCancelled,
+          );
+          return;
+        }
+        if (outcome) {
+          final mockPaymentId = 'pay_mock_${DateTime.now().millisecondsSinceEpoch}';
+          await _verifyAndConfirm(
+            bookingId: bookingId,
+            orderId: serverOrderId,
+            paymentId: mockPaymentId,
+            isMock: true,
+          );
+        } else {
+          await _releaseBookingAfterPaymentFailure(
+            'Simulated gateway failure',
+            kind: GatewayFailureKind.paymentFailed,
+          );
+        }
+        return;
+      }
+
+      // Real Razorpay flow: everything comes from the server. No fallbacks.
+      final razorpayKey = data['key']?.toString();
+      final serverAmount = double.tryParse(data['amount']?.toString() ?? '');
+      final currency = data['currency']?.toString();
+      if (razorpayKey == null || razorpayKey.isEmpty) {
+        if (!mounted) return;
+        AppToast.show(context, 'Payment gateway is not configured', isError: true);
+        return;
+      }
+      if (serverAmount == null || serverAmount <= 0) {
+        if (!mounted) return;
+        AppToast.show(context, 'Payment amount is invalid. Please retry.', isError: true);
+        return;
+      }
+      if (currency == null || currency.isEmpty) {
+        if (!mounted) return;
+        AppToast.show(context, 'Payment currency is missing. Please retry.', isError: true);
+        return;
+      }
+
+      // Load profile for prefill info (best effort).
+      String email = "athlete@example.com";
+      String phone = "9999999999";
+      try {
+        final profile = await ApiService.getProfile();
+        if (profile['success'] == true && profile['data'] != null) {
+          email = profile['data']['email'] ?? email;
+          phone = profile['data']['phone_number'] ?? phone;
+        }
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      final options = {
+        'key': razorpayKey,
+        'amount': (serverAmount * 100).toInt(),
+        'currency': currency,
+        'name': 'Athletespov',
+        'description': widget.venue['name'] ?? 'Booking Payment',
+        'order_id': serverOrderId,
+        'prefill': {
+          'contact': phone,
+          'email': email,
+        },
+        'external': {
+          'wallets': ['paytm']
+        }
+      };
+
+      try {
+        _razorpay.open(options);
+      } catch (e) {
+        if (!mounted) return;
+        AppToast.show(context, 'Error opening Razorpay: $e', isError: true);
+      }
+    } finally {
+      if (mounted && !_confirmationShown) setState(() => _isLoading = false);
     }
   }
 
@@ -4090,11 +4774,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
     final borderCol = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.08);
 
-    final price = double.parse(widget.slot['price'].toString());
-    final finalPrice = price - _discount;
-    final convenience = finalPrice * 0.04;
-    final gst = finalPrice * 0.03 * 0.18;
-    final total = finalPrice + convenience + gst;
+    // Pre-booking estimate from the slot price. The authoritative totals
+    // (coupon discount, fees, GST) come from the server booking response
+    // and are what Razorpay is actually charged.
+    final price = double.tryParse(widget.slot['price']?.toString() ?? '') ?? 0.0;
+    final convenience = price * 0.04;
+    final gst = price * 0.03 * 0.18;
+    final total = price + convenience + gst;
 
     final deposit = total * 0.3;
     final outstanding = total * 0.7;
@@ -4265,14 +4951,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     child: Column(
                       children: [
                         _buildPriceRow("Slot Price", "₹${price.toStringAsFixed(2)}", textCol),
-                        if (_discount > 0) _buildPriceRow("Discount Applied", "-₹${_discount.toStringAsFixed(2)}", Colors.green),
                         _buildPriceRow("Convenience Fee (4%)", "₹${convenience.toStringAsFixed(2)}", textCol),
                         _buildPriceRow("GST (18% on commission)", "₹${gst.toStringAsFixed(2)}", textCol),
                         const Divider(height: 24),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text("Total Amount", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 15)),
+                            Text("Estimated Total", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 15)),
                             Text("₹${total.toStringAsFixed(2)}", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: AppColors.pink, fontSize: 16)),
                           ],
                         ),
@@ -4292,7 +4977,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: ElevatedButton(
-                      onPressed: _processPayment,
+                      onPressed: _isLoading ? null : _processPayment,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
@@ -4328,15 +5013,143 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 // -------------------------------------------------------------
 // Confirmation Screen & E-Ticket
 // -------------------------------------------------------------
+
+/// Human label for a server booking status. PENDING is deliberately NOT
+/// described as a successful "Booked" state: the slot is only held while the
+/// payment is unconfirmed.
+String bookingStatusLabel(String? status) {
+  switch (status) {
+    case 'CONFIRMED':
+      return 'Confirmed';
+    case 'CANCELLED':
+      return 'Cancelled';
+    case 'EXPIRED':
+      return 'Expired';
+    case 'COMPLETED':
+      return 'Completed';
+    case 'PENDING':
+      return 'Payment Pending';
+    default:
+      return status == null || status.isEmpty ? 'Payment Pending' : status;
+  }
+}
+
+/// Accent colour for a server booking status (mirrors the admin palette).
+Color bookingStatusColor(String? status) {
+  switch (status) {
+    case 'CONFIRMED':
+    case 'COMPLETED':
+      return Colors.green;
+    case 'CANCELLED':
+      return Colors.redAccent;
+    case 'EXPIRED':
+      return Colors.grey;
+    case 'PENDING':
+    default:
+      return Colors.amber;
+  }
+}
+
 class ConfirmationScreen extends StatelessWidget {
   final Map<String, dynamic> booking;
-  const ConfirmationScreen({super.key, required this.booking});
+
+  /// True when the booking was confirmed through the local dev mock flow.
+  /// Shows an explicit test banner; never set from real Razorpay payments.
+  final bool isTestPayment;
+
+  const ConfirmationScreen({super.key, required this.booking, this.isTestPayment = false});
+
+  /// Server-reported status. Never invented locally: when the server did not
+  /// say CONFIRMED this screen must not claim a confirmed booking.
+  String get _status => (booking['status'] ?? 'PENDING').toString();
+
+  bool get _isUsable => _status == 'CONFIRMED' || _status == 'COMPLETED';
+
+  /// Null-safe money display (never "₹null").
+  String _money(dynamic value) {
+    if (value == null) return '—';
+    final n = double.tryParse(value.toString());
+    if (n == null) return '—';
+    return '₹${n.toStringAsFixed(2)}';
+  }
+
+  /// Null-safe sport display (API returns a `sport_types` list).
+  String _ticketSport() {
+    final venue = booking['venue'];
+    if (venue is Map) {
+      final types = venue['sport_types'];
+      if (types is List && types.isNotEmpty) {
+        return types.map((e) => e.toString()).join(', ');
+      }
+      final single = venue['sport_type']?.toString() ?? '';
+      if (single.isNotEmpty) return single;
+    }
+    return '—';
+  }
+
+  /// Null-safe "Date & Time" line (never "null - null").
+  String _slotDateTime() {
+    final slot = booking['slot'];
+    if (slot is! Map) return '—';
+    String datePart = '';
+    final dateRaw = slot['date']?.toString() ?? '';
+    if (dateRaw.isNotEmpty) {
+      final dt = DateTime.tryParse(dateRaw);
+      if (dt != null) {
+        datePart =
+            '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} ';
+      }
+    }
+    final start = slot['start_time']?.toString() ?? '';
+    final end = slot['end_time']?.toString() ?? '';
+    final timePart = [start, end].where((s) => s.isNotEmpty).join(' - ');
+    final combined = '$datePart$timePart'.trim();
+    return combined.isEmpty ? '—' : combined;
+  }
+
+  String get _headline {
+    switch (_status) {
+      case 'CONFIRMED':
+        return 'Booking Confirmed!';
+      case 'COMPLETED':
+        return 'Booking Completed';
+      case 'PENDING':
+        return 'Payment Pending';
+      case 'CANCELLED':
+        return 'Booking Cancelled';
+      case 'EXPIRED':
+        return 'Booking Expired';
+      default:
+        return 'Booking ${bookingStatusLabel(_status)}';
+    }
+  }
+
+  String get _subtitle {
+    switch (_status) {
+      case 'CONFIRMED':
+        return 'Your slot is locked and confirmed.';
+      case 'COMPLETED':
+        return 'This booking has been completed.';
+      case 'PENDING':
+        return 'Your slot is reserved while payment is confirmed. This is NOT a confirmed booking yet.';
+      case 'CANCELLED':
+        return 'This booking was cancelled — the slot has been released.';
+      case 'EXPIRED':
+        return 'The payment deadline passed — the slot has been released.';
+      default:
+        return 'Booking status reported by the server.';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textCol = isDark ? Colors.white : const Color(0xFF1A1A1A);
     final subtextCol = isDark ? Colors.white70 : const Color(0xFF6B7280);
+    final statusCol = bookingStatusColor(_status);
+    final onlineAmount = booking['online_amount'];
+    final venueAmount = booking['venue_amount'];
+    final venuePaid = double.tryParse((venueAmount ?? 0).toString()) ?? 0;
 
     return Scaffold(
       backgroundColor: context.bgCol,
@@ -4347,31 +5160,55 @@ class ConfirmationScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 20),
-              // Large animated-like success icon
+              // Large animated-like status icon
               Center(
                 child: Container(
                   width: 90,
                   height: 90,
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.12),
+                    color: statusCol.withOpacity(0.12),
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.green.withOpacity(0.3), width: 2),
+                    border: Border.all(color: statusCol.withOpacity(0.3), width: 2),
                   ),
-                  child: const Icon(Icons.check_circle_outline_rounded, size: 54, color: Colors.green),
+                  child: Icon(
+                    _isUsable
+                        ? Icons.check_circle_outline_rounded
+                        : _status == 'PENDING'
+                            ? Icons.hourglass_bottom_rounded
+                            : Icons.cancel_outlined,
+                    size: 54,
+                    color: statusCol,
+                  ),
                 ),
               ),
               const SizedBox(height: 24),
               Text(
-                "Booking Confirmed!",
+                _headline,
                 textAlign: TextAlign.center,
                 style: GoogleFonts.sora(fontSize: 26, fontWeight: FontWeight.bold, color: textCol),
               ),
               const SizedBox(height: 8),
               Text(
-                "Your slot is locked and confirmed.",
+                _subtitle,
                 textAlign: TextAlign.center,
                 style: GoogleFonts.sora(color: subtextCol, fontSize: 14),
               ),
+              if (isTestPayment) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                  ),
+                  child: Text(
+                    "Test payment successful — local mock mode, no real money moved.",
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.sora(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
               const SizedBox(height: 32),
 
               // Glass Ticket Card
@@ -4383,48 +5220,79 @@ class ConfirmationScreen extends StatelessWidget {
                   children: [
                     Text(
                       booking['eticket_code'] ?? 'APV-2026-XXXXXX',
+                      textAlign: TextAlign.center,
                       style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1, color: textCol),
                     ),
                     const SizedBox(height: 20),
-                    // QR Code
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
+                    if (_isUsable) ...[
+                      // QR Code (only for a booking the server confirmed)
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: QrImageView(
+                          data: booking['eticket_code'] ?? '',
+                          version: QrVersions.auto,
+                          size: 160.0,
+                          backgroundColor: Colors.white,
+                        ),
                       ),
-                      child: QrImageView(
-                        data: booking['eticket_code'] ?? '',
-                        version: QrVersions.auto,
-                        size: 160.0,
-                        backgroundColor: Colors.white,
+                      const SizedBox(height: 16),
+                      Text(
+                        "Show this QR at the venue for check-in",
+                        style: GoogleFonts.sora(color: Colors.grey, fontSize: 12),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      "Show this QR at the venue for check-in",
-                      style: GoogleFonts.sora(color: Colors.grey, fontSize: 12),
-                    ),
+                    ] else ...[
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: statusCol.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: statusCol.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(Icons.info_outline_rounded, color: statusCol, size: 30),
+                            const SizedBox(height: 8),
+                            Text(
+                              _status == 'PENDING'
+                                  ? 'No valid ticket yet — this booking is only reserved until the payment is confirmed or the deadline passes.'
+                                  : 'This booking is ${bookingStatusLabel(_status).toLowerCase()} — it cannot be used for entry.',
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.sora(color: subtextCol, fontSize: 12, height: 1.4),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const Divider(height: 36),
                     _buildTicketRow("Venue", booking['venue']?['name'] ?? 'Sports Turf', textCol, subtextCol),
-                    _buildTicketRow("Sport", booking['venue']?['sport_type'] ?? 'Football', textCol, subtextCol),
-                    _buildTicketRow("Date & Time", "${booking['slot']?['start_time']} - ${booking['slot']?['end_time']}", textCol, subtextCol),
-                    _buildTicketRow("Status", "CONFIRMED", Colors.green, subtextCol),
+                    _buildTicketRow("Sport", _ticketSport(), textCol, subtextCol),
+                    _buildTicketRow("Date & Time", _slotDateTime(), textCol, subtextCol),
+                    _buildTicketRow("Status", bookingStatusLabel(_status), statusCol, subtextCol),
                     const Divider(height: 24),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text("Online Paid", style: GoogleFonts.sora(color: subtextCol, fontSize: 13)),
-                        Text("₹${booking['online_amount']}", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 15)),
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Text(_money(onlineAmount), textAlign: TextAlign.end, overflow: TextOverflow.ellipsis, style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 15)),
+                        ),
                       ],
                     ),
-                    if (double.parse((booking['venue_amount'] ?? 0).toString()) > 0) ...[
+                    if (venuePaid > 0) ...[
                       const SizedBox(height: 8),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text("Pay at Venue", style: GoogleFonts.sora(color: subtextCol, fontSize: 13)),
-                          Text("₹${booking['venue_amount']}", style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 15)),
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(_money(venueAmount), textAlign: TextAlign.end, overflow: TextOverflow.ellipsis, style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: Colors.amber, fontSize: 15)),
+                          ),
                         ],
                       ),
                     ]
@@ -4644,14 +5512,35 @@ class _BookingsTabState extends State<BookingsTab> {
 
     if (confirm == true) {
       setState(() => _isLoading = true);
-      final res = await ApiService.cancelBooking(bookingId);
+      Map<String, dynamic> res = <String, dynamic>{};
+      String? message;
+      bool isError = false;
+      try {
+        res = await ApiService.cancelBooking(bookingId).timeout(const Duration(seconds: 20));
+      } catch (e) {
+        // Timeout/network failure: the server may not have received the
+        // request. Never claim the booking was cancelled.
+        message = 'Could not reach the server — the booking was NOT cancelled. Please refresh and try again.';
+        isError = true;
+      }
+      if (message == null) {
+        final data = res['data'];
+        if (res['success'] == true && data is Map && data['bookingStatus'] == 'CANCELLED') {
+          message = data['refundMessage']?.toString() ?? data['message']?.toString() ?? 'Booking cancelled successfully.';
+        } else if (res['success'] == true) {
+          message = 'Server responded but did not confirm the cancellation. Please refresh My Bookings.';
+          isError = true;
+        } else {
+          message = res['error']?['message']?.toString() ?? 'Could not cancel the booking. Please refresh and try again.';
+          isError = true;
+        }
+      }
       _loadBookings();
       if (mounted) {
-        final msg = res['refundMessage'] ?? "Booking cancelled successfully.";
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(msg, style: GoogleFonts.sora()),
-            backgroundColor: Colors.black87,
+            content: Text(message, style: GoogleFonts.sora()),
+            backgroundColor: isError ? Colors.red.shade800 : Colors.black87,
           ),
         );
       }
@@ -4698,7 +5587,14 @@ class _BookingsTabState extends State<BookingsTab> {
                   itemCount: _bookings.length,
                   itemBuilder: (context, index) {
                     final booking = _bookings[index];
-                    final isCancelled = booking['status'] == "CANCELLED";
+                    // Authoritative status straight from the server — never
+                    // derived from local state, slot status or Razorpay UI.
+                    final status = booking['status']?.toString() ?? 'PENDING';
+                    final statusCol = bookingStatusColor(status);
+                    // Mirrors the server state machine: only live bookings
+                    // (PENDING / CONFIRMED) may be cancelled; CANCELLED,
+                    // EXPIRED and COMPLETED are terminal.
+                    final canCancel = status == 'PENDING' || status == 'CONFIRMED';
 
                     return Container(
                       margin: const EdgeInsets.only(bottom: 16),
@@ -4720,13 +5616,13 @@ class _BookingsTabState extends State<BookingsTab> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: isCancelled ? Colors.red.withOpacity(0.15) : AppColors.pink.withOpacity(0.15),
+                                    color: statusCol.withOpacity(0.15),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
-                                    booking['status'] ?? 'PENDING',
+                                    bookingStatusLabel(status),
                                     style: GoogleFonts.sora(
-                                      color: isCancelled ? Colors.redAccent : AppColors.pink,
+                                      color: statusCol,
                                       fontSize: 10,
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -4761,30 +5657,34 @@ class _BookingsTabState extends State<BookingsTab> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  "Paid: ₹${booking['online_amount']}",
+                                  // Never claim money was paid for a booking
+                                  // the server has not confirmed.
+                                  (status == 'CONFIRMED' || status == 'COMPLETED')
+                                      ? "Paid: ₹${booking['online_amount']}"
+                                      : "Amount: ₹${booking['online_amount']}",
                                   style: GoogleFonts.sora(fontWeight: FontWeight.bold, color: textCol, fontSize: 14),
                                 ),
-                                if (!isCancelled) ...[
-                                  Row(
-                                    children: [
-                                      TextButton(
-                                        onPressed: () {
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                              builder: (context) => ConfirmationScreen(booking: booking),
-                                            ),
-                                          );
-                                        },
-                                        child: Text("View Ticket", style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 12)),
-                                      ),
+                                Row(
+                                  children: [
+                                    TextButton(
+                                      onPressed: () {
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (context) => ConfirmationScreen(booking: booking),
+                                          ),
+                                        );
+                                      },
+                                      child: Text("View Ticket", style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 12)),
+                                    ),
+                                    if (canCancel) ...[
                                       const SizedBox(width: 8),
                                       TextButton(
                                         onPressed: () => _cancel(booking),
                                         child: Text("Cancel", style: GoogleFonts.sora(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
                                       ),
                                     ],
-                                  )
-                                ]
+                                  ],
+                                )
                               ],
                             )
                           ],
@@ -5185,21 +6085,32 @@ class _ProfileTabState extends State<ProfileTab> {
   }
  
   void _handleWalletPaymentSuccess(PaymentSuccessResponse response) async {
+    final orderId = response.orderId;
+    final paymentId = response.paymentId;
+    if (!mounted) return;
+    if (orderId == null || orderId.isEmpty || paymentId == null || paymentId.isEmpty) {
+      AppToast.show(context, 'Wallet payment response was incomplete. Please retry.', isError: true);
+      setState(() => _isLoading = false);
+      return;
+    }
     setState(() => _isLoading = true);
     try {
       final res = await ApiService.verifyWalletDeposit(
-        response.orderId ?? '',
-        response.paymentId ?? '',
+        orderId,
+        paymentId,
         amount: _pendingDepositAmount,
+        signature: response.signature,
       );
+      if (!mounted) return;
       if (res['success'] == true) {
         AppToast.show(context, "Wallet topped up successfully!");
         _loadProfile();
       } else {
-        AppToast.show(context, res['message'] ?? "Deposit verification failed.", isError: true);
+        AppToast.show(context, res['error']?['message'] ?? res['message'] ?? "Deposit verification failed.", isError: true);
         setState(() => _isLoading = false);
       }
     } catch (e) {
+      if (!mounted) return;
       AppToast.show(context, "Error verifying deposit: $e", isError: true);
       setState(() => _isLoading = false);
     }
@@ -5312,8 +6223,49 @@ class _ProfileTabState extends State<ProfileTab> {
       }
  
       final data = payInit['data'];
-      final orderId = data['orderId'];
-      final razorpayKey = data['key'] ?? 'rzp_test_Lp542L8X1v9n5R';
+      if (data is! Map<String, dynamic>) {
+        setState(() => _isLoading = false);
+        AppToast.show(context, "Payment order was not created. Please retry.", isError: true);
+        return;
+      }
+      final orderId = data['orderId']?.toString();
+      if (orderId == null || orderId.isEmpty) {
+        setState(() => _isLoading = false);
+        AppToast.show(context, "Payment order was not created. Please retry.", isError: true);
+        return;
+      }
+      final razorpayKey = data['key']?.toString();
+
+      // Local mock mode (backend dev flag only, no key issued): verify
+      // directly with an identifiable ID. Never open Razorpay here.
+      if (razorpayKey == null || razorpayKey.isEmpty) {
+        if (orderId.startsWith('order_wallet_mock_') || orderId.startsWith('order_mock_')) {
+          try {
+            final mockPaymentId = 'pay_mock_${DateTime.now().millisecondsSinceEpoch}';
+            final res = await ApiService.verifyWalletDeposit(
+              orderId,
+              mockPaymentId,
+              amount: amount,
+            );
+            if (!mounted) return;
+            setState(() => _isLoading = false);
+            if (res['success'] == true) {
+              AppToast.show(context, "Test top-up successful — local mock mode, no real money moved.");
+              _loadProfile();
+            } else {
+              AppToast.show(context, res['error']?['message'] ?? res['message'] ?? "Test top-up failed.", isError: true);
+            }
+          } catch (e) {
+            if (!mounted) return;
+            setState(() => _isLoading = false);
+            AppToast.show(context, "Error verifying test top-up: $e", isError: true);
+          }
+          return;
+        }
+        setState(() => _isLoading = false);
+        AppToast.show(context, "Payment gateway is not configured", isError: true);
+        return;
+      }
  
       String email = "athlete@example.com";
       String phone = "9999999999";
@@ -5416,6 +6368,7 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   void _logout() async {
+    WebSocketSyncManager.disconnect();
     await ApiService.clearToken();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -5651,13 +6604,17 @@ class _ProfileTabState extends State<ProfileTab> {
       );
     }
 
-    final pId = _profile['user_id'] ?? 'PID-12847-XYZ';
-    String? avatarUrl = _profile['avatar_url'];
+    final String? pId = _profile['user_id']?.toString();
+    final String pIdShort = (pId == null || pId.isEmpty)
+        ? ''
+        : (pId.length > 8 ? '${pId.substring(0, 8)}...' : pId);
+    String? avatarUrl = _profile['avatar_url']?.toString();
     if (avatarUrl != null && avatarUrl.isNotEmpty) {
       if (avatarUrl.startsWith('/uploads')) {
         final serverBase = ApiService.activeUrl.replaceAll('/api', '');
         avatarUrl = '$serverBase$avatarUrl';
       }
+      avatarUrl = ApiService.resolveMediaUrl(avatarUrl);
     }
 
     return Scaffold(
@@ -5696,12 +6653,13 @@ class _ProfileTabState extends State<ProfileTab> {
                           child: CircleAvatar(
                             radius: 33,
                             backgroundColor: Colors.white,
-                            backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
+                            foregroundImage: avatarUrl != null && avatarUrl.isNotEmpty
                                 ? NetworkImage(avatarUrl)
                                 : null,
-                            child: avatarUrl != null && avatarUrl.isNotEmpty
-                                ? null
-                                : const Icon(Icons.person, size: 38, color: AppColors.pink),
+                            onForegroundImageError: avatarUrl != null && avatarUrl.isNotEmpty
+                                ? (_, __) {}
+                                : null,
+                            child: const Icon(Icons.person, size: 38, color: AppColors.pink),
                           ),
                         ),
                         Positioned(
@@ -5730,23 +6688,24 @@ class _ProfileTabState extends State<ProfileTab> {
                     style: GoogleFonts.sora(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.white70),
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        "Player ID: ${pId.substring(0, 8)}...",
-                        style: GoogleFonts.sora(fontSize: 14, color: Colors.white70),
-                      ),
-                      const SizedBox(width: 4),
-                      GestureDetector(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: pId));
-                          AppToast.show(context, "Player ID copied to clipboard!");
-                        },
-                        child: const Icon(Icons.copy, size: 14, color: Colors.white70),
-                      ),
-                    ],
-                  ),
+                  if (pIdShort.isNotEmpty)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          "Player ID: $pIdShort",
+                          style: GoogleFonts.sora(fontSize: 14, color: Colors.white70),
+                        ),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: pId ?? ''));
+                            AppToast.show(context, "Player ID copied to clipboard!");
+                          },
+                          child: const Icon(Icons.copy, size: 14, color: Colors.white70),
+                        ),
+                      ],
+                    ),
                   const SizedBox(height: 6),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -5756,7 +6715,7 @@ class _ProfileTabState extends State<ProfileTab> {
                       Text(
                         _profile['city'] != null && _profile['state'] != null
                             ? "${_profile['city']}, ${_profile['state']}"
-                            : (_profile['city'] ?? _profile['state'] ?? 'Ahmedabad, Gujarat'),
+                            : (_profile['city'] ?? _profile['state'] ?? 'Location not set'),
                         style: GoogleFonts.sora(fontSize: 15, color: Colors.white70),
                       ),
                     ],
@@ -5764,7 +6723,7 @@ class _ProfileTabState extends State<ProfileTab> {
                   const SizedBox(height: 4),
                   Builder(
                     builder: (context) {
-                      String memberSince = "Member since Jan 2025";
+                      String memberSince = "Member since —";
                       if (_profile['created_at'] != null) {
                         try {
                           final dt = DateTime.parse(_profile['created_at'].toString());
@@ -6363,12 +7322,16 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Widget _buildWalletStatCol(Color textCol, Color subtextCol, String val, String label) {
-    return Column(
-      children: [
-        Text(val, style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.pink)),
-        const SizedBox(height: 4),
-        Text(label, style: GoogleFonts.sora(fontSize: 11, color: subtextCol)),
-      ],
+    // Expanded so three columns always fit the card width (fixes RenderFlex
+    // overflow on narrow screens); labels wrap instead of overflowing.
+    return Expanded(
+      child: Column(
+        children: [
+          Text(val, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.sora(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.pink)),
+          const SizedBox(height: 4),
+          Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: GoogleFonts.sora(fontSize: 11, color: subtextCol)),
+        ],
+      ),
     );
   }
 
@@ -6908,7 +7871,9 @@ class _AdminChatWidgetState extends State<_AdminChatWidget> {
 // -------------------------------------------------------------
 class ViewAllVenuesScreen extends StatelessWidget {
   final List<dynamic> venues;
-  const ViewAllVenuesScreen({super.key, required this.venues});
+  final double? userLat;
+  final double? userLng;
+  const ViewAllVenuesScreen({super.key, required this.venues, this.userLat, this.userLng});
 
   @override
   Widget build(BuildContext context) {
@@ -7012,7 +7977,11 @@ class ViewAllVenuesScreen extends StatelessWidget {
                                           const Icon(Icons.location_on_rounded, color: Colors.grey, size: 13),
                                           const SizedBox(width: 4),
                                           Text(
-                                            "${venue['address']?.toString().split(',').first ?? 'Ahmedabad'} • ${venue['distance']?.toString() ?? '0.8'} km",
+                                            () {
+                                              final addr = venue['address']?.toString().split(',').first ?? 'Ahmedabad';
+                                              final dist = venueDistanceLabel(venue, userLat, userLng);
+                                              return dist == null ? addr : '$addr • $dist';
+                                            }(),
                                             style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
                                           ),
                                         ],
@@ -7200,11 +8169,12 @@ class _PhoneCollectionScreenState extends State<PhoneCollectionScreen> {
   bool _isLoading = false;
 
   void _submitPhone() async {
-    final phone = _phoneController.text.trim();
-    if (phone.isEmpty || phone.length < 10) {
-      AppToast.show(context, 'Please enter a valid phone number', isError: true);
+    final raw = _phoneController.text.trim();
+    if (!ApiService.isValidIndianPhone(raw)) {
+      AppToast.show(context, 'Please enter a valid 10-digit mobile number', isError: true);
       return;
     }
+    final phone = ApiService.normalizeIndianPhone(raw);
     setState(() => _isLoading = true);
 
     try {
@@ -7308,10 +8278,13 @@ class _PhoneCollectionScreenState extends State<PhoneCollectionScreen> {
                       TextField(
                         controller: _phoneController,
                         keyboardType: TextInputType.phone,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         style: GoogleFonts.sora(color: textCol),
                         decoration: InputDecoration(
                           prefixIcon: const Icon(Icons.phone, color: AppColors.pink),
-                          hintText: "Phone Number",
+                          prefixText: '+91 ',
+                          prefixStyle: GoogleFonts.sora(color: textCol, fontWeight: FontWeight.bold),
+                          hintText: "10-digit mobile number",
                           hintStyle: GoogleFonts.sora(color: Colors.grey),
                           filled: true,
                           fillColor: isDark ? Colors.white.withOpacity(0.02) : Colors.black.withOpacity(0.02),
@@ -7372,7 +8345,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.initState();
     _nameController.text = widget.initialProfile['name'] ?? '';
     _emailController.text = widget.initialProfile['email'] ?? '';
-    _phoneController.text = widget.initialProfile['phone_number'] ?? '';
+    _phoneController.text = ApiService.nationalMobileNumber(widget.initialProfile['phone_number']);
     _cityController.text = widget.initialProfile['city'] ?? '';
     _stateController.text = widget.initialProfile['state'] ?? '';
   }
@@ -7393,11 +8366,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       AppToast.show(context, "Name cannot be empty", isError: true);
       return;
     }
+    final phoneInput = _phoneController.text.trim();
+    if (phoneInput.isNotEmpty && !ApiService.isValidIndianPhone(phoneInput)) {
+      AppToast.show(context, "Please enter a valid 10-digit mobile number", isError: true);
+      return;
+    }
     setState(() => _isLoading = true);
     final res = await ApiService.updateProfile(
       name: _nameController.text.trim(),
       email: _emailController.text.trim().isNotEmpty ? _emailController.text.trim() : null,
-      phoneNumber: _phoneController.text.trim().isNotEmpty ? _phoneController.text.trim() : null,
+      phoneNumber: phoneInput.isNotEmpty ? phoneInput : null,
       city: _cityController.text.trim().isNotEmpty ? _cityController.text.trim() : null,
       state: _stateController.text.trim().isNotEmpty ? _stateController.text.trim() : null,
       password: _passwordController.text.trim().isNotEmpty ? _passwordController.text.trim() : null,
@@ -7455,9 +8433,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   const SizedBox(height: 16),
                   TextField(
                     controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     style: TextStyle(color: textCol),
                     decoration: InputDecoration(
                       labelText: "Phone Number",
+                      prefixText: "+91 ",
                       filled: true,
                       fillColor: fillCol,
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),

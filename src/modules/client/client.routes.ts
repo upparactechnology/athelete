@@ -84,6 +84,7 @@ clientRoutes.delete('/partner/venues/:venueId/slots/bulk', authorize('partner'),
 clientRoutes.patch('/partner/slots/:id/block', authorize('partner'), ClientController.toggleSlotBlock);
 clientRoutes.get('/partner/bookings', authorize('partner'), ClientController.getPartnerBookings);
 clientRoutes.patch('/partner/bookings/:id/checkin', authorize('partner'), ClientController.checkinBooking);
+clientRoutes.patch('/partner/bookings/:id/collect-cash', authorize('partner'), ClientController.collectVenueCash);
 clientRoutes.get('/partner/disputes', authorize('partner'), ClientController.getPartnerDisputes);
 clientRoutes.post('/partner/disputes', authorize('partner'), ClientController.createPartnerDispute);
 clientRoutes.get('/partner/settlements', authorize('partner'), ClientController.getPartnerSettlements);

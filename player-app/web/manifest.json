@@ -1,6 +1,6 @@
 {
-    "name": "player_app",
-    "short_name": "player_app",
+    "name": "Athletespov",
+    "short_name": "Athletespov",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

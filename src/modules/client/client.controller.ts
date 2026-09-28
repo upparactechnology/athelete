@@ -163,7 +163,12 @@ export class ClientController {
     try {
       const userId = req.user?.id;
       const { id } = req.params;
-      const data = await ClientService.cancelBooking(id, userId!);
+      // `pendingOnly` is the payment-failure auto-release path: the server
+      // cancels ONLY a still-PENDING booking and answers 409 NOT_PENDING
+      // (with details.status) otherwise, so a client can never cancel a
+      // booking that a webhook/verification has just confirmed.
+      const pendingOnly = req.body?.pendingOnly === true;
+      const data = await ClientService.cancelBooking(id, userId!, { pendingOnly });
       res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);
@@ -446,6 +451,17 @@ export class ClientController {
       const partnerId = requirePartner(req);
       const { id } = req.params;
       const data = await ClientService.checkinBooking(id, partnerId);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async collectVenueCash(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const partnerId = requirePartner(req);
+      const { id } = req.params;
+      const data = await ClientService.collectVenueCash(id, partnerId);
       res.status(200).json({ success: true, data });
     } catch (err) {
       next(err);

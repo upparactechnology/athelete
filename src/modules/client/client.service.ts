@@ -38,6 +38,7 @@ import {
   ensureReviewEligible,
 } from '../../shared/utils/bookingLifecycle.js';
 import { notifyPartner, notifyUser } from '../../shared/services/notifications.js';
+import { releaseBookingOnFailedPayment } from '../../shared/services/paymentFailure.js';
 import { requestBookingRefund } from '../../shared/services/refunds.js';
 import { claimCouponUsage, recordCouponRedemption, rollbackCouponForBooking } from '../../shared/services/coupons.js';
 import { createSession, refreshSession, revokeAllSessions, revokeSession } from '../../shared/utils/sessions.js';
@@ -600,12 +601,6 @@ export class ClientService {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
       if (!isNaN(userLat) && !isNaN(userLng)) {
-        const coordinatesMap: Record<string, { lat: number; lng: number }> = {
-          "Downtown Football Arena": { lat: 28.6273, lng: 77.3725 },
-          "Smash Badminton Center": { lat: 12.9716, lng: 77.5946 },
-          "Grand Tennis Club": { lat: 19.0596, lng: 72.8295 }
-        };
-
         const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
           const R = 6371; // Earth radius in km
           const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -619,36 +614,32 @@ export class ClientService {
         };
 
         const mappedVenues = venues.map((venue: any) => {
-          let lat = venue.latitude ? Number(venue.latitude) : null;
-          let lng = venue.longitude ? Number(venue.longitude) : null;
-          if (lat === null || lng === null) {
-            let coords = coordinatesMap[venue.name];
-            if (!coords) {
-              if (venue.address?.includes("Noida")) {
-                coords = { lat: 28.6273, lng: 77.3725 };
-              } else if (venue.address?.includes("Indiranagar") || venue.address?.includes("Bengaluru")) {
-                coords = { lat: 12.9716, lng: 77.5946 };
-              } else if (venue.address?.includes("Bandra") || venue.address?.includes("Mumbai")) {
-                coords = { lat: 19.0596, lng: 72.8295 };
-              } else {
-                coords = { lat: userLat, lng: userLng };
-              }
-            }
-            lat = coords.lat;
-            lng = coords.lng;
+          // Only real database coordinates are ever used. Venues without
+          // stored coordinates get nulls (never demo-city guesses and never
+          // the user's own location as venue coords) so clients can honestly
+          // report "distance unavailable" instead of a fabricated number.
+          const rawLat = venue.latitude !== null && venue.latitude !== undefined && venue.latitude !== ''
+            ? Number(venue.latitude)
+            : NaN;
+          const rawLng = venue.longitude !== null && venue.longitude !== undefined && venue.longitude !== ''
+            ? Number(venue.longitude)
+            : NaN;
+          if (!Number.isFinite(rawLat) || !Number.isFinite(rawLng)) {
+            return { ...venue, latitude: null, longitude: null, distance: null };
           }
-          const dist = calculateDistance(userLat, userLng, lat, lng);
+          const dist = calculateDistance(userLat, userLng, rawLat, rawLng);
           return {
             ...venue,
-            latitude: lat,
-            longitude: lng,
+            latitude: rawLat,
+            longitude: rawLng,
             distance: parseFloat(dist.toFixed(2))
           };
         });
 
-        // Sort by nearest first (display all venues near or far)
+        // Sort by nearest first (display all venues near or far).
+        // Venues without coordinates sort last instead of first (0 km).
         return mappedVenues
-          .sort((a: any, b: any) => a.distance - b.distance);
+          .sort((a: any, b: any) => (a.distance ?? Number.POSITIVE_INFINITY) - (b.distance ?? Number.POSITIVE_INFINITY));
       }
     }
 
@@ -1324,13 +1315,42 @@ export class ClientService {
       return { processed: true, event: type, bookingId: txn.booking_id, confirmed: true };
     }
     if (type === 'payment.failed') {
-      if (txn.txn_status !== 'success') {
-        await prisma.transaction.update({
-          where: { txn_id: txn.txn_id },
-          data: { razorpay_payment_id: paymentId, txn_status: 'failed' },
-        });
+      // B3-equivalent for failures: the ledger is marked failed and, ONLY when
+      // the booking is still PENDING, it is transitioned PENDING -> CANCELLED
+      // and its slot released. CONFIRMED / CANCELLED / EXPIRED bookings are
+      // never touched, the release is conditional (no double release) and the
+      // whole handler is idempotent across webhook retries.
+      const outcome = await releaseBookingOnFailedPayment(txn.booking_id, txn.txn_id, paymentId);
+      if (outcome.released && outcome.booking) {
+        const released = outcome.booking;
+        const bookingEvent = toBookingEvent(released);
+        const bookingPrivateEvent = toBookingEvent(released, { includePrivate: true });
+        const partnerId = (released.venue as any)?.partner_id;
+        WebSocketService.broadcast('bookings', bookingEvent);
+        WebSocketService.emitToUser(released.user_id, 'booking_cancelled', bookingPrivateEvent);
+        if (partnerId) {
+          WebSocketService.emitToUser(partnerId, 'booking_cancelled', bookingPrivateEvent);
+        }
+        if (outcome.slot) {
+          WebSocketService.broadcast('slots', [outcome.slot]);
+        }
+        await notifyUser(
+          released.user_id,
+          'booking',
+          "Payment Failed",
+          "Your payment could not be completed, so the booking was cancelled and the slot released. You can book again.",
+          `payment-failed:${paymentId ?? txn.txn_id}`
+        ).catch(() => undefined);
       }
-      return { processed: true, event: type, bookingId: txn.booking_id };
+      return {
+        processed: true,
+        event: type,
+        bookingId: txn.booking_id,
+        released: outcome.released,
+        slotReleased: outcome.slotReleased,
+        bookingStatus: outcome.bookingStatus,
+        reason: outcome.reason,
+      };
     }
     return { ignored: true, reason: 'unsupported-event' };
   }
@@ -1346,7 +1366,11 @@ export class ClientService {
     });
   }
 
-  public static async cancelBooking(bookingId: string, userId: string) {
+  public static async cancelBooking(
+    bookingId: string,
+    userId: string,
+    opts: { pendingOnly?: boolean } = {}
+  ) {
     const booking = await prisma.booking.findUnique({
       where: { booking_id: bookingId },
       include: {
@@ -1362,27 +1386,77 @@ export class ClientService {
 
     if (!booking) throw new NotFoundError("Booking not found");
     if (booking.user_id !== userId) throw new ValidationError("Unauthorized cancellation");
+    // Auto-release after a failed payment: only a booking that is STILL
+    // PENDING may be released this way. If a webhook/verification confirmed it
+    // in the meantime we must never cancel it here — the caller is told the
+    // current status instead (409 NOT_PENDING + details.status).
+    if (opts.pendingOnly && booking.status !== BOOKING_STATUS.PENDING) {
+      throw new ConflictError(
+        `Booking is ${booking.status}; only a PENDING booking can be auto-released.`,
+        'NOT_PENDING',
+        { status: booking.status }
+      );
+    }
     // P2-2: only live bookings cancel. EXPIRED/COMPLETED/CANCELLED reject.
     assertBookingTransition(booking.status, BOOKING_STATUS.CANCELLED);
 
     // Refund policy quote (March 2026 policy) via the shared helper so the
     // cancel response and the refund endpoint use identical server-side math.
+    // Auto-release after a failed payment captured nothing: never quote a
+    // refund the platform does not owe.
     const quote = computeRefundQuote(
       booking.online_amount, booking.convenience_fee,
       (booking.slot as any)?.date, (booking.slot as any)?.start_time, new Date()
     );
-    const refundEligibility = quote.eligibility;
-    const refundMessage = quote.message;
-    const estimatedRefundAmount = quote.amount;
+    const refundEligibility = opts.pendingOnly ? 'NO_REFUND' as const : quote.eligibility;
+    const refundMessage = opts.pendingOnly
+      ? 'No payment was captured — nothing to refund.'
+      : quote.message;
+    const estimatedRefundAmount = opts.pendingOnly ? 0 : quote.amount;
 
-    const updated = await prisma.booking.update({
-      where: { booking_id: bookingId },
-      data: { status: "CANCELLED" }
-    });
+    // Conditional transition on the auto-release path: if a concurrent
+    // verification/webhook changed the status after our read, this booking is
+    // no longer PENDING and MUST NOT be cancelled by a payment-failure flow.
+    let updated;
+    if (opts.pendingOnly) {
+      const flipped = await prisma.booking.updateMany({
+        where: { booking_id: bookingId, status: BOOKING_STATUS.PENDING },
+        data: { status: BOOKING_STATUS.CANCELLED, expires_at: null },
+      });
+      if (flipped.count === 0) {
+        const fresh = await prisma.booking.findUnique({ where: { booking_id: bookingId }, select: { status: true } });
+        throw new ConflictError(
+          `Booking is ${fresh?.status ?? 'unknown'}; only a PENDING booking can be auto-released.`,
+          'NOT_PENDING',
+          { status: fresh?.status ?? null }
+        );
+      }
+      updated = await prisma.booking.findUnique({ where: { booking_id: bookingId } });
+    } else {
+      updated = await prisma.booking.update({
+        where: { booking_id: bookingId },
+        data: { status: "CANCELLED" }
+      });
+    }
 
-    const updatedSlot = await prisma.slot.update({
-      where: { slot_id: booking.slot_id },
+    // Release the held slot only while it is still `booked`: the slot can
+    // never be released twice, and a slot re-booked by someone else is never
+    // clobbered.
+    await prisma.slot.updateMany({
+      where: { slot_id: booking.slot_id, status: "booked" },
       data: { status: "available" }
+    });
+    const updatedSlot = await prisma.slot.findUnique({ where: { slot_id: booking.slot_id } });
+
+    // The order for this booking can no longer be paid once the booking is
+    // CANCELLED: record an unfinished capture attempt truthfully as `failed`
+    // rather than leaving a live `pending` row in the finance ledger. A late
+    // webhook/verification proving the money DID arrive still flips it to
+    // `success` — the booking stays CANCELLED, i.e. a refund case, never a
+    // silently resurrected confirmation.
+    await prisma.transaction.updateMany({
+      where: { booking_id: bookingId, txn_type: "capture", txn_status: "pending" },
+      data: { txn_status: "failed" },
     });
 
     // P2-4/P2-7: roll the coupon claim back exactly once (idempotent,
@@ -1396,27 +1470,34 @@ export class ClientService {
 
     // P2-3: attempt a real refund for captured payments (best-effort; the
     // booking stays cancelled regardless and the outcome is reported).
+    // Auto-release after a FAILED payment never refunds: no money was captured.
     let refundStatus: any = { attempted: false };
-    try {
-      const quote = computeRefundQuote(
-        booking.online_amount, booking.convenience_fee,
-        (booking.slot as any)?.date, (booking.slot as any)?.start_time, new Date()
-      );
-      if (quote.amount > 0) {
-        const outcome = await requestBookingRefund({ bookingId, userId });
-        refundStatus = { attempted: true, ...outcome, refundTxn: undefined, refundId: outcome.refundTxn?.txn_id };
-      } else {
-        refundStatus = { attempted: false, reason: quote.eligibility };
+    if (opts.pendingOnly) {
+      refundStatus = { attempted: false, reason: 'NO_PAYMENT_CAPTURED' };
+    } else {
+      try {
+        const quote = computeRefundQuote(
+          booking.online_amount, booking.convenience_fee,
+          (booking.slot as any)?.date, (booking.slot as any)?.start_time, new Date()
+        );
+        if (quote.amount > 0) {
+          const outcome = await requestBookingRefund({ bookingId, userId });
+          refundStatus = { attempted: true, ...outcome, refundTxn: undefined, refundId: outcome.refundTxn?.txn_id };
+        } else {
+          refundStatus = { attempted: false, reason: quote.eligibility };
+        }
+      } catch (err: any) {
+        refundStatus = { attempted: true, failed: true, reason: err?.message || 'refund-failed' };
       }
-    } catch (err: any) {
-      refundStatus = { attempted: true, failed: true, reason: err?.message || 'refund-failed' };
     }
 
     const slotTime = `${booking.slot.start_time} - ${booking.slot.end_time}`;
     await notifyUser(
       booking.user_id, 'booking',
       "Booking Cancelled",
-      `Your booking at ${booking.venue.name} has been cancelled. Policy outcome: ${refundMessage}`,
+      opts.pendingOnly
+        ? `Your payment for ${booking.venue.name} did not complete, so the booking was cancelled and the slot released.`
+        : `Your booking at ${booking.venue.name} has been cancelled. Policy outcome: ${refundMessage}`,
       `booking-cancelled:${bookingId}`
     ).catch(() => undefined);
     const cancelPartnerId = (booking.venue as any)?.partner_id;
@@ -1434,10 +1515,15 @@ export class ClientService {
     if (cancelPartnerId) {
       WebSocketService.emitToUser(cancelPartnerId, 'booking_cancelled', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: booking.slot_id }));
     }
-    WebSocketService.broadcast('slots', [updatedSlot]);
+    if (updatedSlot) {
+      WebSocketService.broadcast('slots', [updatedSlot]);
+    }
 
     return {
       message: "Booking cancelled successfully",
+      // Server-side truth the client can render without guessing:
+      bookingStatus: updated?.status ?? BOOKING_STATUS.CANCELLED,
+      slotStatus: updatedSlot?.status ?? "available",
       refundEligibility,
       refundMessage,
       estimatedRefundAmount,
@@ -1792,8 +1878,19 @@ export class ClientService {
       },
       orderBy: { created_at: 'desc' }
     });
+    // Cash-collection state per booking (success cash txn exists).
+    const ids = bookings.map((b) => b.booking_id);
+    const cashTxns = ids.length
+      ? await prisma.transaction.findMany({
+          where: { booking_id: { in: ids }, txn_type: 'cash', txn_status: 'success' },
+          select: { booking_id: true }
+        })
+      : [];
+    const collected = new Set(cashTxns.map((t) => t.booking_id));
     // Partner sees player contact card only — never credentials.
-    return sanitizeBookingForResponse(bookings);
+    return sanitizeBookingForResponse(
+      bookings.map((b) => ({ ...b, cash_collected: collected.has(b.booking_id) }))
+    );
   }
 
   public static async checkinBooking(bookingId: string, partnerId?: string) {
@@ -1825,6 +1922,75 @@ export class ClientService {
     WebSocketService.broadcast('bookings', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }));
     WebSocketService.emitToUser(booking.user_id, 'checked_in', toBookingEvent({ ...updated, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }, { includePrivate: true }));
     return { success: true, message: "Player checked in successfully", booking: sanitizeBookingForResponse({ ...updated, user: booking.user, venue: booking.venue }) };
+  }
+
+  /**
+   * Partner records venue cash (pay-at-venue 70% share) collected in person.
+   * Ownership-enforced, idempotent, and limited to live pay-at-venue bookings
+   * with a positive venue_amount. Recorded as a `cash` success transaction.
+   */
+  public static async collectVenueCash(bookingId: string, partnerId?: string) {
+    const booking = await prisma.booking.findUnique({
+      where: { booking_id: bookingId },
+      include: {
+        user: true,
+        venue: true,
+        slot: true
+      }
+    });
+    if (!booking) throw new NotFoundError("Booking not found");
+    if (partnerId && booking.venue.partner_id !== partnerId) {
+      throw new ForbiddenError("You cannot collect cash for another partner's venue");
+    }
+    if (booking.payment_mode !== 'pay_at_venue') {
+      throw new ConflictError("Cash collection applies only to pay-at-venue bookings", "ILLEGAL_STATUS_TRANSITION");
+    }
+    const cashDue = Number(booking.venue_amount || 0);
+    if (!Number.isFinite(cashDue) || cashDue <= 0) {
+      throw new ConflictError("No venue cash due on this booking", "ILLEGAL_STATUS_TRANSITION");
+    }
+    if (booking.status !== 'CONFIRMED' && booking.status !== 'COMPLETED') {
+      throw new ConflictError(`Cash can only be collected for confirmed bookings (current: ${booking.status})`, "ILLEGAL_STATUS_TRANSITION");
+    }
+
+    const existing = await prisma.transaction.findFirst({
+      where: { booking_id: bookingId, txn_type: 'cash', txn_status: 'success' }
+    });
+    if (existing) {
+      return {
+        alreadyCollected: true,
+        message: "Venue cash already collected",
+        booking: sanitizeBookingForResponse({ ...booking, cash_collected: true }),
+        transaction: existing
+      };
+    }
+
+    const transaction = await prisma.transaction.create({
+      data: {
+        booking_id: bookingId,
+        razorpay_order_id: `cash_${bookingId}`,
+        razorpay_payment_id: `cash_${Date.now()}`,
+        txn_type: 'cash',
+        txn_status: 'success',
+        amount: cashDue
+      }
+    });
+
+    await notifyUser(
+      booking.user_id, 'booking',
+      "Cash Payment Recorded",
+      `Your venue payment of ₹${cashDue.toFixed(2)} at ${booking.venue.name} was recorded. Enjoy your game!`,
+      `cash-collected:${bookingId}`
+    ).catch(() => undefined);
+
+    WebSocketService.broadcast('bookings', toBookingEvent({ ...booking, venue_id: booking.venue_id, slot_id: (booking as any).slot_id }));
+
+    return {
+      alreadyCollected: false,
+      message: `₹${cashDue.toFixed(2)} cash collected`,
+      booking: sanitizeBookingForResponse({ ...booking, cash_collected: true }),
+      transaction
+    };
   }
 
   public static async getPartnerDisputes(partnerId: string) {

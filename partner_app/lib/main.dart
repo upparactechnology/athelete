@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:geolocator/geolocator.dart';
 import 'api_service.dart';
+import 'services/location_service.dart';
 import 'websocket_sync.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
@@ -58,6 +59,30 @@ String formatLocalDate(dynamic dateVal) {
   }
 }
 
+/// Formats any backend amount as Indian rupees (₹12,345.00).
+/// Never throws and never shows raw floats or "₹null": missing or
+/// non-numeric values render as "—".
+String formatINR(dynamic value) {
+  if (value == null) return '—';
+  final n = double.tryParse(value.toString());
+  if (n == null || !n.isFinite) return '—';
+  final parts = n.abs().toStringAsFixed(2).split('.');
+  String intPart = parts[0];
+  String grouped = intPart;
+  if (intPart.length > 3) {
+    final last3 = intPart.substring(intPart.length - 3);
+    String rest = intPart.substring(0, intPart.length - 3);
+    final groups = <String>[];
+    while (rest.length > 2) {
+      groups.insert(0, rest.substring(rest.length - 2));
+      rest = rest.substring(0, rest.length - 2);
+    }
+    if (rest.isNotEmpty) groups.insert(0, rest);
+    grouped = '${groups.join(',')},$last3';
+  }
+  return '${n < 0 ? '-₹' : '₹'}$grouped.${parts[1]}';
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ApiService.checkServerUrl();
@@ -86,7 +111,7 @@ class _PartnerPOVAppState extends State<PartnerPOVApp> {
     final darkTextTheme = GoogleFonts.soraTextTheme(ThemeData.dark().textTheme);
 
     return MaterialApp(
-      title: "Partner's POV",
+      title: "Athletespov Partner",
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
@@ -315,6 +340,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await ApiService.verifyOtp(_phoneController.text.trim(), _otpController.text.trim());
       if (response['success'] == true) {
+        WebSocketSyncManager.connect();
         if (!mounted) return;
         final profileRes = await ApiService.getProfile();
         final profile = profileRes['data'] ?? {};
@@ -361,6 +387,12 @@ class _LoginScreenState extends State<LoginScreen> {
       
       final GoogleSignInAccount account = await GoogleSignIn.instance.authenticate();
 
+      final String? idToken = account.authentication.idToken;
+
+      if (idToken == null || idToken.isEmpty) {
+        throw Exception('Google did not return an ID token');
+      }
+
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -392,16 +424,14 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       );
 
-      final response = await ApiService.googleLogin(
-        account.email, 
-        account.displayName ?? 'Google User'
-      );
+      final response = await ApiService.googleLogin(idToken);
       
       if (mounted) {
         Navigator.pop(context);
       }
 
       if (response['success'] == true) {
+        WebSocketSyncManager.connect();
         if (!mounted) return;
         final profileRes = await ApiService.getProfile();
         final profile = profileRes['data'] ?? {};
@@ -1803,10 +1833,14 @@ class _BookingsTabState extends State<BookingsTab> {
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Text(
-                                          b['venue']?['name'] ?? 'Venue Pitch',
-                                          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                                        Expanded(
+                                          child: Text(
+                                            b['venue']?['name'] ?? 'Venue Pitch',
+                                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ),
+                                        const SizedBox(width: 12),
                                         Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                           decoration: BoxDecoration(
@@ -1831,10 +1865,14 @@ class _BookingsTabState extends State<BookingsTab> {
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Text(
-                                          "Amount: ₹${b['online_amount']}",
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                        Flexible(
+                                          child: Text(
+                                            "Amount: ${formatINR(b['online_amount'])}",
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ),
+                                        const SizedBox(width: 12),
                                         ElevatedButton(
                                           onPressed: () {
                                             Navigator.push(
@@ -1877,6 +1915,14 @@ class BookingDetailsScreen extends StatefulWidget {
 
 class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   bool _isLoading = false;
+  bool _collectingCash = false;
+  late bool _cashCollected;
+
+  @override
+  void initState() {
+    super.initState();
+    _cashCollected = widget.booking['cash_collected'] == true;
+  }
 
   void _checkin() async {
     setState(() => _isLoading = true);
@@ -1895,10 +1941,61 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
     }
   }
 
+  void _collectCash() async {
+    final cashDue = double.tryParse(widget.booking['venue_amount']?.toString() ?? '') ?? 0;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Collect Venue Cash"),
+        content: Text(
+          "Confirm that you have received ${formatINR(widget.booking['venue_amount'])} in cash from the player for this booking?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.pink),
+            child: const Text("Cash Received", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    setState(() => _collectingCash = true);
+    try {
+      final res = await ApiService.collectVenueCash(widget.booking['booking_id']);
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final data = res['data'] is Map ? res['data'] as Map : {};
+        setState(() => _cashCollected = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(data['message']?.toString() ?? 'Venue cash recorded (cash due: ${formatINR(cashDue)})')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['error']?['message']?.toString() ?? res['message']?.toString() ?? 'Failed to record cash collection')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _collectingCash = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final b = widget.booking;
     final isConfirmed = b['status'] == "CONFIRMED";
+    final isPayAtVenue = b['payment_mode'] == 'pay_at_venue';
+    final venueCashDue = double.tryParse(b['venue_amount']?.toString() ?? '') ?? 0;
 
     return Scaffold(
       appBar: AppBar(title: const Text("Booking Details")),
@@ -1920,9 +2017,14 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text("Booking ID", style: TextStyle(color: Colors.grey)),
-                              Text(
-                                b['eticket_code'] ?? 'APV-2026-000000',
-                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              const SizedBox(width: 12),
+                              Flexible(
+                                child: Text(
+                                  b['eticket_code'] ?? 'APV-2026-000000',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                  textAlign: TextAlign.end,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               )
                             ],
                           ),
@@ -1939,12 +2041,69 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text("Online Paid", style: TextStyle(fontSize: 16)),
-                              Text(
-                                "₹${b['online_amount']}",
-                                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.pink),
+                              const SizedBox(width: 12),
+                              Flexible(
+                                child: Text(
+                                  formatINR(b['online_amount']),
+                                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.pink),
+                                  textAlign: TextAlign.end,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               )
                             ],
-                          )
+                          ),
+                          if (isPayAtVenue && venueCashDue > 0) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: (_cashCollected ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A)).withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: (_cashCollected ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A)).withOpacity(0.3),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    _cashCollected ? Icons.check_circle_rounded : Icons.payments_rounded,
+                                    color: _cashCollected ? const Color(0xFF3DDC84) : const Color(0xFFFFB03A),
+                                    size: 22,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          "Venue Cash: ${formatINR(b['venue_amount'])}",
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          _cashCollected
+                                              ? "Collected from player"
+                                              : "To be collected at venue",
+                                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (!_cashCollected)
+                                    ElevatedButton(
+                                      onPressed: _collectingCash ? null : _collectCash,
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppColors.pink,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      child: _collectingCash
+                                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                          : const Text("Collect", style: TextStyle(color: Colors.white)),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ]
                         ],
                       ),
                     ),
@@ -1990,7 +2149,15 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: const TextStyle(color: Colors.grey)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -2270,19 +2437,49 @@ class _VenuesTabState extends State<VenuesTab> {
   List<dynamic> _venues = [];
   bool _isLoading = true;
 
+  /// One cached GPS fix per screen session, shared by all venue cards.
+  UserCoordinates? _userCoords;
+
+  /// 'default' or 'nearest'. Nearest is only selectable with a location fix.
+  String _sortMode = 'default';
+
   @override
   void initState() {
     super.initState();
     _loadVenues();
   }
 
-  void _loadVenues() async {
+  void _loadVenues({bool refreshLocation = false}) async {
     setState(() => _isLoading = true);
     final res = await ApiService.getPartnerVenues();
+    final coords = refreshLocation
+        ? await LocationService.refreshCoordinates()
+        : await LocationService.getCurrentCoordinates();
+    if (!mounted) return;
     setState(() {
       _venues = res['data'] ?? [];
+      _userCoords = coords;
       _isLoading = false;
     });
+  }
+
+  /// Venues in display order. Nearest-first uses straight-line (geographic)
+  /// distance; venues without coordinates sort last.
+  List<dynamic> get _displayVenues {
+    if (_sortMode == 'nearest' && _userCoords != null) {
+      return LocationService.sortNearestFirst(_venues, _userCoords!);
+    }
+    return _venues;
+  }
+
+  String _venueDistanceLabel(dynamic venue) {
+    final map = venue is Map ? venue : null;
+    final label = LocationService.distanceLabel(
+      user: _userCoords,
+      venueLat: LocationService.parseCoordinate(map?['latitude']),
+      venueLng: LocationService.parseCoordinate(map?['longitude']),
+    );
+    return label == null ? 'Distance unavailable' : '\u{1F4CD} $label';
   }
 
   @override
@@ -2292,6 +2489,30 @@ class _VenuesTabState extends State<VenuesTab> {
         title: const Text("My Venues", style: TextStyle(fontWeight: FontWeight.bold)),
         elevation: 0,
         backgroundColor: Colors.transparent,
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.sort_rounded),
+            tooltip: 'Sort venues',
+            onSelected: (value) => setState(() => _sortMode = value),
+            itemBuilder: (context) => [
+              CheckedPopupMenuItem(
+                value: 'default',
+                checked: _sortMode == 'default',
+                child: const Text('Default order'),
+              ),
+              CheckedPopupMenuItem(
+                value: 'nearest',
+                checked: _sortMode == 'nearest',
+                enabled: _userCoords != null,
+                child: Text(
+                  _userCoords != null
+                      ? 'Nearest (straight-line)'
+                      : 'Nearest (location unavailable)',
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 70.0),
@@ -2308,7 +2529,7 @@ class _VenuesTabState extends State<VenuesTab> {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          _loadVenues();
+          _loadVenues(refreshLocation: true);
           await Future.delayed(const Duration(milliseconds: 600));
         },
         color: AppColors.pink,
@@ -2329,9 +2550,9 @@ class _VenuesTabState extends State<VenuesTab> {
                 : ListView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 90),
-                    itemCount: _venues.length,
+                    itemCount: _displayVenues.length,
                   itemBuilder: (context, index) {
-                    final v = _venues[index];
+                    final v = _displayVenues[index];
                     final isListed = v['status'] == "listed";
                     return Card(
                       margin: const EdgeInsets.only(bottom: 16),
@@ -2348,6 +2569,8 @@ class _VenuesTabState extends State<VenuesTab> {
                                 slotMode: v['slot_mode'] ?? '60m',
                                 openingTime: v['opening_time'] ?? '09:00 AM',
                                 closingTime: v['closing_time'] ?? '09:00 PM',
+                                venueLatitude: LocationService.parseCoordinate(v['latitude']),
+                                venueLongitude: LocationService.parseCoordinate(v['longitude']),
                               ),
                             ),
                           );
@@ -2449,6 +2672,20 @@ class _VenuesTabState extends State<VenuesTab> {
                                   const SizedBox(height: 8),
                                   Text("Sport: ${v['sport_types']?.join(', ') ?? 'N/A'}", style: const TextStyle(color: Colors.grey)),
                                   Text("Base Price: ₹${v['base_price']}", style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.pink)),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.location_on_rounded, size: 14, color: Colors.grey),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          _venueDistanceLabel(v),
+                                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
                               ),
                             )
@@ -3750,6 +3987,11 @@ class SlotSchedulingScreen extends StatefulWidget {
   final String slotMode;
   final String openingTime;
   final String closingTime;
+
+  /// Stored backend coordinates of the venue. Null when unknown.
+  final double? venueLatitude;
+  final double? venueLongitude;
+
   const SlotSchedulingScreen({
     super.key, 
     required this.venueId, 
@@ -3757,6 +3999,8 @@ class SlotSchedulingScreen extends StatefulWidget {
     required this.slotMode,
     required this.openingTime,
     required this.closingTime,
+    this.venueLatitude,
+    this.venueLongitude,
   });
 
   @override
@@ -3770,11 +4014,15 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
   bool _isSelectionMode = false;
   final Set<String> _selectedSlotIds = {};
 
+  /// Straight-line distance label for this venue. Null while loading.
+  String? _distanceText;
+
   @override
   void initState() {
     super.initState();
     _selectedDate = DateTime.now().toIso8601String().substring(0, 10);
     _loadSlots();
+    _loadDistance();
     WebSocketSyncManager.subscribe('slots', _loadSlots);
   }
 
@@ -3790,6 +4038,32 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
     setState(() {
       _slots = res['data'] ?? [];
       _isLoading = false;
+    });
+  }
+
+  /// Resolves the straight-line distance label once per screen open, reusing
+  /// the cached GPS fix. Never invents a value when coordinates are missing.
+  void _loadDistance() async {
+    const unavailable = '\u{1F4CD} Distance unavailable';
+    final vLat = widget.venueLatitude;
+    final vLng = widget.venueLongitude;
+    if (vLat == null || vLng == null) {
+      if (mounted) setState(() => _distanceText = unavailable);
+      return;
+    }
+    final user = await LocationService.getCurrentCoordinates();
+    if (!mounted) return;
+    setState(() {
+      _distanceText = user == null
+          ? unavailable
+          : '\u{1F4CD} ${LocationService.formatDistance(
+              LocationService.distanceMeters(
+                user.latitude,
+                user.longitude,
+                vLat,
+                vLng,
+              ),
+            )} from your current location';
     });
   }
 
@@ -4099,6 +4373,15 @@ class _SlotSchedulingScreenState extends State<SlotSchedulingScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text("Configure Slots Blocker Grid", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  if (_distanceText != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4.0),
+                      child: Text(
+                        _distanceText!,
+                        style: const TextStyle(color: Colors.grey, fontSize: 13),
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   // Calendar date switcher
                   SizedBox(
@@ -4414,26 +4697,31 @@ class _PaymentsTabState extends State<PaymentsTab> {
   }
 
   Widget _buildOverviewTab(ThemeData theme) {
-    double totalRevenue = 0.0;
-    double onlinePaid = 0.0;
-    double payAtVenue = 0.0;
+    double totalOnline = 0.0;
+    double cashDue = 0.0;
+    double cashCollected = 0.0;
 
     for (var b in _bookings) {
       if (b['status'] == "CONFIRMED") {
-        final amt = double.tryParse(b['online_amount']?.toString() ?? '0') ?? 0.0;
+        // The online share is always paid online — including the ~30%
+        // deposit on pay-at-venue bookings. The venue share is cash.
+        totalOnline += double.tryParse(b['online_amount']?.toString() ?? '') ?? 0.0;
         if (b['payment_mode'] == 'pay_at_venue') {
-          payAtVenue += amt;
-        } else {
-          onlinePaid += amt;
+          final venueAmt = double.tryParse(b['venue_amount']?.toString() ?? '') ?? 0.0;
+          cashDue += venueAmt;
+          if (b['cash_collected'] == true) cashCollected += venueAmt;
         }
-        totalRevenue += amt;
       }
     }
+    double displayTotal = totalOnline + cashDue;
+    double displayOnline = totalOnline;
+    // Outstanding cash still to be collected (due minus already collected).
+    double displayOutstanding = (cashDue - cashCollected).clamp(0.0, double.infinity);
 
     // Try to fallback to profile total earnings if bookings are empty
-    if (totalRevenue == 0.0 && _profile['total_earnings'] != null) {
-      totalRevenue = double.tryParse(_profile['total_earnings'].toString()) ?? 0.0;
-      onlinePaid = totalRevenue;
+    if (displayTotal == 0.0 && _profile['total_earnings'] != null) {
+      displayTotal = double.tryParse(_profile['total_earnings'].toString()) ?? 0.0;
+      displayOnline = displayTotal;
     }
 
     return SingleChildScrollView(
@@ -4450,21 +4738,44 @@ class _PaymentsTabState extends State<PaymentsTab> {
                 children: [
                   const Text("Total Revenue Earned", style: TextStyle(color: Colors.grey)),
                   const SizedBox(height: 8),
-                  Text("₹${totalRevenue.toStringAsFixed(2)}", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                  Text(formatINR(displayTotal), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
                   const Divider(height: 32),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text("Online Payments"),
-                      Text("₹${onlinePaid.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                      Flexible(
+                        child: Text(formatINR(displayOnline),
+                            textAlign: TextAlign.end,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold)),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text("Pay at Venue (Cash)"),
-                      Text("₹${payAtVenue.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                      const Text("Pay at Venue (Cash Due)"),
+                      Flexible(
+                        child: Text(formatINR(displayOutstanding),
+                            textAlign: TextAlign.end,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("Cash Collected"),
+                      Flexible(
+                        child: Text(formatINR(cashCollected),
+                            textAlign: TextAlign.end,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF3DDC84))),
+                      ),
                     ],
                   ),
                 ],
@@ -4603,6 +4914,7 @@ class _ProfileTabState extends State<ProfileTab> {
   bool _isLoading = true;
   Map<String, dynamic> _systemSettings = {};
   Map<String, String> _localDocPaths = {};
+  List<dynamic> _bookings = [];
 
   // Notification preferences
   bool _bookingAlerts = true;
@@ -5467,9 +5779,19 @@ class _ProfileTabState extends State<ProfileTab> {
       final settingsRes = await ApiService.getSettings();
       final settings = settingsRes['data'] ?? {};
 
+      // Bookings feed the earnings summary (never blocks the profile).
+      List<dynamic> bookings = [];
+      try {
+        final bookingsRes = await ApiService.getPartnerBookings();
+        bookings = bookingsRes['data'] ?? [];
+      } catch (e) {
+        debugPrint("Error loading profile bookings: $e");
+      }
+
       setState(() {
         _profile = data;
         _systemSettings = settings;
+        _bookings = bookings;
         _isLoading = false;
       });
       if (data['fcm_token'] == null) {
@@ -5482,7 +5804,7 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   void _showEditProfileDialog() {
-    final phoneController = TextEditingController(text: _profile['phone_number'] ?? '');
+    final phoneController = TextEditingController(text: ApiService.nationalMobileNumber(_profile['phone_number']));
     final emailController = TextEditingController(text: _profile['email'] ?? '');
     bool isSaving = false;
 
@@ -5501,9 +5823,12 @@ class _ProfileTabState extends State<ProfileTab> {
                 children: [
                   TextField(
                     controller: phoneController,
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
                     decoration: const InputDecoration(
                       labelText: "Phone Number",
+                      prefixText: "+91 ",
                       labelStyle: TextStyle(color: Colors.grey),
                       enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
                       focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
@@ -5531,10 +5856,17 @@ class _ProfileTabState extends State<ProfileTab> {
                   onPressed: isSaving
                       ? null
                       : () async {
+                          final newPhone = phoneController.text.trim();
+                          if (newPhone.isNotEmpty && !ApiService.isValidIndianPhone(newPhone)) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Please enter a valid 10-digit mobile number'), backgroundColor: Colors.redAccent),
+                            );
+                            return;
+                          }
                           setDialogState(() => isSaving = true);
                           try {
                             final res = await ApiService.updateProfile(
-                              phoneNumber: phoneController.text.trim(),
+                              phoneNumber: newPhone,
                               email: emailController.text.trim(),
                             );
                             if (res['success'] == true) {
@@ -5628,7 +5960,7 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   void _showChangeMobileDialog() {
-    final mobileController = TextEditingController(text: _profile['phone_number'] ?? '');
+    final mobileController = TextEditingController(text: ApiService.nationalMobileNumber(_profile['phone_number']));
     bool isSaving = false;
 
     showDialog(
@@ -5647,9 +5979,11 @@ class _ProfileTabState extends State<ProfileTab> {
                   TextField(
                     controller: mobileController,
                     keyboardType: TextInputType.phone,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1A1A1A)),
                     decoration: const InputDecoration(
                       labelText: "New Mobile Number",
+                      prefixText: "+91 ",
                       labelStyle: TextStyle(color: Colors.grey),
                       enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
                       focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.pink)),
@@ -5667,9 +6001,9 @@ class _ProfileTabState extends State<ProfileTab> {
                       ? null
                       : () async {
                           final newMobile = mobileController.text.trim();
-                          if (newMobile.isEmpty) {
+                          if (!ApiService.isValidIndianPhone(newMobile)) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Please enter a valid mobile number'), backgroundColor: Colors.redAccent),
+                              const SnackBar(content: Text('Please enter a valid 10-digit mobile number'), backgroundColor: Colors.redAccent),
                             );
                             return;
                           }
@@ -6255,6 +6589,7 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   void _logout() async {
+    WebSocketSyncManager.disconnect();
     await ApiService.clearToken();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -6394,7 +6729,7 @@ class _ProfileTabState extends State<ProfileTab> {
   Widget _buildProfileHeader(bool isDark, Color textColor, Color secondaryTextColor) {
     final String businessName = _profile['venues'] != null && (_profile['venues'] as List).isNotEmpty
         ? _profile['venues'][0]['name']
-        : (_profile['email'] != null ? _profile['email'].split('@')[0].toUpperCase() : 'Sunset Sports Arena');
+        : (_profile['email'] != null ? _profile['email'].split('@')[0].toUpperCase() : 'Your Business');
 
     final kycStatus = _profile['kyc_status'] ?? 'unverified';
     final bool isVerified = kycStatus == 'verified';
@@ -6417,17 +6752,23 @@ class _ProfileTabState extends State<ProfileTab> {
       badge = "🥉";
     }
 
-    final createdYear = _profile['created_at'] != null 
-        ? DateTime.parse(_profile['created_at']).year.toString() 
-        : "2025";
+    final createdYear = _profile['created_at'] != null
+        ? DateTime.tryParse(_profile['created_at'].toString())?.year.toString()
+        : null;
 
-    String? avatarUrl = _profile['avatar_url'];
+    String? avatarUrl = _profile['avatar_url']?.toString();
     if (avatarUrl != null && avatarUrl.isNotEmpty) {
       if (avatarUrl.startsWith('/uploads')) {
         final serverBase = ApiService.activeUrl.replaceAll('/api', '');
         avatarUrl = '$serverBase$avatarUrl';
       }
+      avatarUrl = ApiService.resolveMediaUrl(avatarUrl);
     }
+
+    final String rawPartnerId = _profile['partner_id']?.toString() ?? '';
+    final String partnerIdLabel = rawPartnerId.isEmpty
+        ? 'Not available'
+        : (rawPartnerId.length > 8 ? '${rawPartnerId.substring(0, 8).toUpperCase()}...' : rawPartnerId.toUpperCase());
 
     return GlassContainer(
       radius: 24,
@@ -6444,12 +6785,13 @@ class _ProfileTabState extends State<ProfileTab> {
                     CircleAvatar(
                       radius: 36,
                       backgroundColor: AppColors.pink.withOpacity(0.2),
-                      backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
+                      foregroundImage: avatarUrl != null && avatarUrl.isNotEmpty
                           ? NetworkImage(avatarUrl)
                           : null,
-                      child: avatarUrl != null && avatarUrl.isNotEmpty
-                          ? null
-                          : const Icon(Icons.person, size: 36, color: AppColors.pink),
+                      onForegroundImageError: avatarUrl != null && avatarUrl.isNotEmpty
+                          ? (_, __) {}
+                          : null,
+                      child: const Icon(Icons.person, size: 36, color: AppColors.pink),
                     ),
                     Positioned(
                       bottom: 0,
@@ -6505,7 +6847,7 @@ class _ProfileTabState extends State<ProfileTab> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      "Partner ID: ${_profile['partner_id']?.toString().substring(0, 8).toUpperCase() ?? 'APV-PARTNER-8823'}",
+                      "Partner ID: $partnerIdLabel",
                       style: TextStyle(fontSize: 11, color: secondaryTextColor),
                     ),
                   ],
@@ -6524,7 +6866,7 @@ class _ProfileTabState extends State<ProfileTab> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text("Profile Completion: $progressPct", style: TextStyle(fontSize: 12, color: textColor, fontWeight: FontWeight.w600)),
-              Text("Member Since: $createdYear", style: TextStyle(fontSize: 11, color: secondaryTextColor)),
+              Text("Member Since: ${createdYear ?? '—'}", style: TextStyle(fontSize: 11, color: secondaryTextColor)),
             ],
           ),
           const SizedBox(height: 8),
@@ -6573,9 +6915,9 @@ class _ProfileTabState extends State<ProfileTab> {
           const SizedBox(height: 16),
           _buildInfoRow(Icons.business_center, businessName, textColor),
           const SizedBox(height: 12),
-          _buildInfoRow(Icons.phone, _profile['phone_number'] ?? "+91 93134 57713", textColor),
+          _buildInfoRow(Icons.phone, _profile['phone_number']?.toString().isNotEmpty == true ? _profile['phone_number'] : 'Not provided', textColor),
           const SizedBox(height: 12),
-          _buildInfoRow(Icons.email, _profile['email'] ?? "partner@email.com", textColor),
+          _buildInfoRow(Icons.email, _profile['email']?.toString().isNotEmpty == true ? _profile['email'] : 'Not provided', textColor),
           const SizedBox(height: 12),
           _buildInfoRow(Icons.location_on, _profile['venues'] != null && (_profile['venues'] as List).isNotEmpty ? (_profile['venues'][0]['address'] ?? 'n/a') : 'n/a', textColor),
           const SizedBox(height: 20),
@@ -6622,7 +6964,7 @@ class _ProfileTabState extends State<ProfileTab> {
     final List<String> months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     final String memberSinceDate = createdDate != null 
         ? "${months[createdDate.month - 1]} ${createdDate.year}" 
-        : "Jan 2026";
+        : "—";
 
 
     final documents = _profile['partner_documents'] as List<dynamic>? ?? [];
@@ -6655,7 +6997,7 @@ class _ProfileTabState extends State<ProfileTab> {
           _buildDetailTile("GST Number", gstVal, secondaryTextColor, textColor),
           _buildDetailTile("PAN Number", panVal, secondaryTextColor, textColor),
           _buildDetailTile("Aadhaar Number", aadhaarVal, secondaryTextColor, textColor),
-          _buildDetailTile("Owner Name", _profile['email'] != null ? _profile['email'].split('@')[0].replaceAll(RegExp(r'[0-9]'), '').toUpperCase() : 'RAJESH SHARMA', secondaryTextColor, textColor),
+          _buildDetailTile("Owner Name", _profile['email'] != null ? _profile['email'].split('@')[0].replaceAll(RegExp(r'[0-9]'), '').toUpperCase() : 'Not provided', secondaryTextColor, textColor),
           _buildDetailTile("Plan Tier", (_profile['plan_tier'] ?? 'free').toUpperCase(), secondaryTextColor, textColor),
           _buildDetailTile("Member Since", memberSinceDate, secondaryTextColor, textColor),
         ],
@@ -7020,7 +7362,32 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Widget _buildEarningsSummaryCard(bool isDark, Color textColor, Color secondaryTextColor) {
-    final earnings = double.tryParse(_profile['total_earnings']?.toString() ?? '0') ?? 0.0;
+    // Real earnings from confirmed bookings (same source as Payments tab).
+    // Lifetime = online + venue shares; This Month filters by booking month;
+    // Pending = uncollected venue cash. No invented percentages.
+    double lifetime = 0.0;
+    double thisMonth = 0.0;
+    double pending = 0.0;
+    final now = DateTime.now();
+    for (var b in _bookings) {
+      if (b['status'] != "CONFIRMED") continue;
+      final online = double.tryParse(b['online_amount']?.toString() ?? '') ?? 0.0;
+      final venueAmt = double.tryParse(b['venue_amount']?.toString() ?? '') ?? 0.0;
+      lifetime += online + venueAmt;
+      final created = DateTime.tryParse(b['created_at']?.toString() ?? '');
+      if (created != null && created.year == now.year && created.month == now.month) {
+        thisMonth += online + venueAmt;
+      }
+      if (b['payment_mode'] == 'pay_at_venue' &&
+          b['cash_collected'] != true &&
+          venueAmt > 0) {
+        pending += venueAmt;
+      }
+    }
+    // Fallback to the profile aggregate only when no booking data exists.
+    if (lifetime == 0.0 && _profile['total_earnings'] != null) {
+      lifetime = double.tryParse(_profile['total_earnings'].toString()) ?? 0.0;
+    }
 
     return GlassContainer(
       radius: 20,
@@ -7033,19 +7400,19 @@ class _ProfileTabState extends State<ProfileTab> {
           Row(
             children: [
               Expanded(
-                child: _buildEarningCol("Lifetime", "₹${earnings.toStringAsFixed(0)}", textColor, secondaryTextColor),
+                child: _buildEarningCol("Lifetime", formatINR(lifetime), textColor, secondaryTextColor),
               ),
               const SizedBox(width: 8),
               Container(width: 1, height: 40, color: Colors.white10),
               const SizedBox(width: 8),
               Expanded(
-                child: _buildEarningCol("This Month", "₹${(earnings * 0.15).toStringAsFixed(0)}", AppColors.pink, secondaryTextColor),
+                child: _buildEarningCol("This Month", formatINR(thisMonth), AppColors.pink, secondaryTextColor),
               ),
               const SizedBox(width: 8),
               Container(width: 1, height: 40, color: Colors.white10),
               const SizedBox(width: 8),
               Expanded(
-                child: _buildEarningCol("Pending", "₹${(earnings * 0.05).toStringAsFixed(0)}", AppColors.purple, secondaryTextColor),
+                child: _buildEarningCol("Pending", formatINR(pending), AppColors.purple, secondaryTextColor),
               ),
             ],
           ),
@@ -7438,7 +7805,7 @@ class _ProfileTabState extends State<ProfileTab> {
       children: [
         Text(title, style: TextStyle(color: titleColor, fontSize: 11)),
         const SizedBox(height: 6),
-        Text(val, style: TextStyle(color: valColor, fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(val, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: valColor, fontWeight: FontWeight.bold, fontSize: 16)),
       ],
     );
   }
@@ -7614,13 +7981,14 @@ class _PhoneCollectionScreenState extends State<PhoneCollectionScreen> {
   bool _isLoading = false;
 
   void _submitPhone() async {
-    final phone = _phoneController.text.trim();
-    if (phone.isEmpty || phone.length < 10) {
+    final raw = _phoneController.text.trim();
+    if (!ApiService.isValidIndianPhone(raw)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid phone number')),
+        const SnackBar(content: Text('Please enter a valid 10-digit mobile number')),
       );
       return;
     }
+    final phone = ApiService.normalizeIndianPhone(raw);
     setState(() => _isLoading = true);
 
     try {
@@ -7690,9 +8058,12 @@ class _PhoneCollectionScreenState extends State<PhoneCollectionScreen> {
               TextField(
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.phone, color: AppColors.pink),
-                  hintText: "Phone Number",
+                  prefixText: '+91 ',
+                  prefixStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  hintText: "10-digit mobile number",
                   filled: true,
                   fillColor: theme.colorScheme.surface,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),

@@ -577,6 +577,38 @@ async function toggleFeatured(venueId, checked) {
 }
 
 // 5. BOOKINGS TAB
+// Display helpers: never render "Invalid Date" or "NaN". Missing values
+// show "—"; legitimate zeros show ₹0.00. No values are invented.
+function fmtLedgerDate(value) {
+    const d = new Date(value);
+    if (value === null || value === undefined || value === '' || isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('en-IN');
+}
+function fmtLedgerINR(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return '₹' + n.toFixed(2);
+}
+function fmtLedgerNumInput(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : '';
+}
+// Booking status -> ledger badge. PENDING means the slot is only HELD while
+// the payment is unconfirmed; it must never read as a successful "Booked".
+const BOOKING_STATUS_BADGE = {
+    PENDING:   { label: 'Payment Pending', cls: 'pending' },
+    CONFIRMED: { label: 'Confirmed',        cls: 'success' },
+    CANCELLED: { label: 'Cancelled',        cls: 'danger' },
+    EXPIRED:   { label: 'Expired',          cls: 'neutral' },
+    COMPLETED: { label: 'Completed',        cls: 'success' },
+};
+
+function bookingStatusBadge(status) {
+    const mapped = BOOKING_STATUS_BADGE[status] || { label: status || 'Unknown', cls: 'neutral' };
+    return `<span class="badge ${mapped.cls}" title="${status || ''}">${mapped.label}</span>`;
+}
+
 async function loadBookingsData() {
     try {
         const bookings = await apiCall('/api/admin/bookings');
@@ -589,25 +621,23 @@ async function loadBookingsData() {
         }
 
         bookings.forEach(b => {
-            const date = new Date(b.slot.date).toLocaleDateString('en-IN');
-            let statusClass = 'neutral';
-            if (b.status === 'CONFIRMED') statusClass = 'success';
-            if (b.status === 'CANCELLED') statusClass = 'danger';
+            const date = fmtLedgerDate(b.slot?.date);
+            const slotTime = `${b.slot?.start_time ?? '—'} - ${b.slot?.end_time ?? '—'}`;
 
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><code>${b.eticket_code}</code></td>
-                <td>${b.user.email || '-'} (${b.user.phone_number})</td>
-                <td>${b.venue.name}</td>
-                <td>${date} <br><small>${b.slot.start_time} - ${b.slot.end_time}</small></td>
-                <td>₹${Number(b.online_amount).toFixed(2)}</td>
-                <td>₹${b.status === 'CONFIRMED' ? Number(b.venue_amount).toFixed(2) : '0.00'}</td>
-                <td><span class="badge ${statusClass}">${b.status}</span></td>
+                <td><code>${b.eticket_code ?? '—'}</code></td>
+                <td>${b.user?.email || '—'} (${b.user?.phone_number ?? '—'})</td>
+                <td>${b.venue?.name ?? '—'}</td>
+                <td>${date} <br><small>${slotTime}</small></td>
+                <td>${fmtLedgerINR(b.online_amount)}</td>
+                <td>${b.status === 'CONFIRMED' ? fmtLedgerINR(b.venue_amount) : '₹0.00'}</td>
+                <td>${bookingStatusBadge(b.status)}</td>
                 <td>
                     <div style="display: flex; gap: 5px; flex-wrap: wrap;">
                         <button class="btn-action text-secondary" ${b.status !== 'CONFIRMED' ? 'disabled' : ''} onclick="openReassignModal('${b.booking_id}', '${b.venue_id}')">Reassign</button>
                         <button class="btn-action text-danger" ${b.status !== 'CONFIRMED' ? 'disabled' : ''} onclick="cancelBooking('${b.booking_id}')">Cancel</button>
-                        <button class="btn-action text-secondary" onclick="openBookingEditModal('${b.booking_id}', '${b.user_id}', '${b.venue_id}', '${b.slot_id}', '${b.payment_mode}', ${Number(b.online_amount)}, ${Number(b.venue_amount)}, '${b.status}')">Edit</button>
+                        <button class="btn-action text-secondary" onclick="openBookingEditModal('${b.booking_id}', '${b.user_id}', '${b.venue_id}', '${b.slot_id}', '${b.payment_mode}', '${fmtLedgerNumInput(b.online_amount)}', '${fmtLedgerNumInput(b.venue_amount)}', '${b.status}')">Edit</button>
                         <button class="btn-action text-danger" onclick="deleteBooking('${b.booking_id}')">Delete</button>
                     </div>
                 </td>
@@ -1731,24 +1761,24 @@ async function loadTransactionsLedger() {
         }
 
         txns.forEach(t => {
-            const date = new Date(t.created_at).toLocaleDateString('en-IN');
+            const date = fmtLedgerDate(t.created_at);
             let statusClass = 'neutral';
             if (t.txn_status === 'success') statusClass = 'success';
             if (t.txn_status === 'failed') statusClass = 'danger';
 
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><code>${t.txn_id.substring(0, 8)}</code></td>
-                <td><code>${t.booking.eticket_code}</code></td>
-                <td><code>${t.razorpay_order_id}</code></td>
+                <td><code>${(t.txn_id || '').substring(0, 8)}</code></td>
+                <td><code>${t.booking?.eticket_code ?? '—'}</code></td>
+                <td><code>${t.razorpay_order_id ?? '—'}</code></td>
                 <td><code>${t.razorpay_payment_id || '-'}</code></td>
-                <td><strong>${t.txn_type.toUpperCase()}</strong></td>
+                <td><strong>${(t.txn_type || '').toUpperCase()}</strong></td>
                 <td><span class="badge ${statusClass}">${t.txn_status}</span></td>
-                <td>₹${Number(t.amount).toFixed(2)}</td>
+                <td>${fmtLedgerINR(t.amount)}</td>
                 <td>${date}</td>
                 <td>
                     <div style="display: flex; gap: 5px;">
-                        <button class="btn-action text-secondary" onclick="openTransactionEditModal('${t.txn_id}', '${t.booking_id}', '${escapeHtml(t.razorpay_order_id)}', '${escapeHtml(t.razorpay_payment_id || '')}', '${t.txn_type}', '${t.txn_status}', ${Number(t.amount)})">Edit</button>
+                        <button class="btn-action text-secondary" onclick="openTransactionEditModal('${t.txn_id}', '${t.booking_id}', '${escapeHtml(t.razorpay_order_id)}', '${escapeHtml(t.razorpay_payment_id || '')}', '${t.txn_type}', '${t.txn_status}', '${fmtLedgerNumInput(t.amount)}')">Edit</button>
                         <button class="btn-action text-danger" onclick="deleteTransaction('${t.txn_id}')">Delete</button>
                     </div>
                 </td>
@@ -3621,11 +3651,216 @@ function sendAdminChatMessage() {
 
 
 function loadReportsData() {
+    // Tab entry point; generation happens on card click (see report engine below).
     console.log("Reports tab loaded");
 }
 
 function loadExportsData() {
+    // Tab entry point; export happens via exportDatasetNow().
     console.log("Exports tab loaded");
+}
+
+// -------------------------------------------------------------
+// REPORTS & EXPORTS ENGINE (CSV downloads from live admin APIs)
+// -------------------------------------------------------------
+// No backend changes: reuses the existing authenticated admin
+// endpoints. Amounts are plain numbers (spreadsheet-friendly),
+// dates are ISO yyyy-mm-dd (sortable). Nothing is invented:
+// missing values export as empty cells.
+function csvCell(value) {
+    if (value === null || value === undefined) return '';
+    const s = String(value);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function downloadCSV(filename, headers, rows) {
+    const lines = [headers.map(csvCell).join(',')];
+    (rows || []).forEach(r => lines.push(r.map(csvCell).join(',')));
+    // \ufeff = BOM so Excel opens UTF-8 (₹, names) correctly.
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
+}
+
+function reportStamp() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function isoDate(value) {
+    if (value === null || value === undefined || value === '') return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    return d.toISOString().slice(0, 10);
+}
+
+function num2(value) {
+    if (value === null || value === undefined || value === '') return '';
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(2) : '';
+}
+
+function numSum(rows, idx) {
+    let total = 0;
+    rows.forEach(r => {
+        const n = Number(r[idx]);
+        if (Number.isFinite(n)) total += n;
+    });
+    return total.toFixed(2);
+}
+
+async function handleReportClick(type, el) {
+    const card = el && el.style ? el : null;
+    let prevCursor = '';
+    try {
+        if (card) {
+            prevCursor = card.style.cursor;
+            card.style.cursor = 'wait';
+            card.style.opacity = '0.6';
+            card.style.pointerEvents = 'none';
+        }
+        await generateReport(type);
+    } catch (err) {
+        console.error(err);
+        alert('Report generation failed: ' + (err.message || err));
+    } finally {
+        if (card) {
+            card.style.cursor = prevCursor;
+            card.style.opacity = '';
+            card.style.pointerEvents = '';
+        }
+    }
+}
+
+async function generateReport(type) {
+    if (type === 'users') return generateUserSignupsReport();
+    if (type === 'venues') return generateVenueListingsReport();
+    if (type === 'bookings') return generateBookingsLedgerReport();
+    if (type === 'financial') return generateFinancialAuditReport();
+    if (type === 'settlements') return generateSettlementsExport();
+    throw new Error('Unknown report type: ' + type);
+}
+
+async function generateUserSignupsReport() {
+    const users = await apiCall('/api/admin/users');
+    const rows = (users || []).map(u => [
+        u.user_id ?? '',
+        u.name ?? '',
+        u.email ?? '',
+        u.phone_number ?? '',
+        u.city ?? '',
+        u.state ?? '',
+        u.status ?? '',
+        isoDate(u.created_at),
+    ]);
+    downloadCSV(
+        `athletepov_user_signups_${reportStamp()}.csv`,
+        ['User ID', 'Name', 'Email', 'Phone', 'City', 'State', 'Status', 'Joined On'],
+        rows
+    );
+}
+
+async function generateVenueListingsReport() {
+    const venues = await apiCall('/api/admin/venues');
+    const rows = (venues || []).map(v => [
+        v.venue_id ?? '',
+        v.name ?? '',
+        (v.partner && v.partner.phone_number) || '',
+        Array.isArray(v.sport_types) ? v.sport_types.join('; ') : (v.sport_types ?? ''),
+        num2(v.base_price),
+        (v.avg_rating === null || v.avg_rating === undefined || v.avg_rating === '') ? '' : Number(v.avg_rating),
+        v.status ?? '',
+        v.address ?? '',
+        isoDate(v.created_at),
+    ]);
+    downloadCSV(
+        `athletepov_venue_listings_${reportStamp()}.csv`,
+        ['Venue ID', 'Name', 'Partner Phone', 'Sports', 'Base Price', 'Avg Rating', 'Status', 'Address', 'Created On'],
+        rows
+    );
+}
+
+async function generateBookingsLedgerReport() {
+    const bookings = await apiCall('/api/admin/bookings');
+    const rows = (bookings || []).map(b => [
+        b.eticket_code ?? '',
+        (b.user && b.user.email) || '',
+        (b.user && b.user.phone_number) || '',
+        (b.venue && b.venue.name) || '',
+        isoDate(b.slot && b.slot.date),
+        b.slot ? `${b.slot.start_time || ''} - ${b.slot.end_time || ''}`.trim() : '',
+        num2(b.online_amount),
+        num2(b.venue_amount),
+        b.payment_mode ?? '',
+        b.status ?? '',
+        isoDate(b.created_at),
+    ]);
+    downloadCSV(
+        `athletepov_bookings_ledger_${reportStamp()}.csv`,
+        ['Eticket Code', 'User Email', 'User Phone', 'Venue', 'Slot Date', 'Slot Time', 'Online Amount', 'Venue Amount', 'Payment Mode', 'Status', 'Booked On'],
+        rows
+    );
+}
+
+async function generateFinancialAuditReport() {
+    const bookings = await apiCall('/api/admin/bookings');
+    const rows = (bookings || []).map(b => [
+        b.eticket_code ?? '',
+        b.status ?? '',
+        num2(b.online_amount),
+        num2(b.venue_amount),
+        num2(b.convenience_fee),
+        num2(b.commission_amount),
+        num2(b.gst_amount),
+        num2(b.partner_amount),
+        isoDate(b.slot && b.slot.date),
+    ]);
+    // Totals row across the numeric columns (standard for audit sheets).
+    rows.push([
+        'TOTAL', '',
+        numSum(rows, 2), numSum(rows, 3), numSum(rows, 4),
+        numSum(rows, 5), numSum(rows, 6), numSum(rows, 7), '',
+    ]);
+    downloadCSV(
+        `athletepov_financial_audit_${reportStamp()}.csv`,
+        ['Eticket Code', 'Status', 'Online Amount', 'Venue Amount', 'Convenience Fee', 'Commission', 'GST', 'Partner Amount', 'Slot Date'],
+        rows
+    );
+}
+
+async function generateSettlementsExport() {
+    const settlements = await apiCall('/api/admin/settlements');
+    const rows = (settlements || []).map(s => [
+        s.settlement_id ?? '',
+        (s.partner && s.partner.phone_number) || '',
+        isoDate(s.period_start),
+        isoDate(s.period_end),
+        num2(s.gross_amount),
+        num2(s.platform_fee),
+        num2(s.net_amount),
+        s.status ?? '',
+    ]);
+    downloadCSV(
+        `athletepov_settlements_${reportStamp()}.csv`,
+        ['Settlement ID', 'Partner Phone', 'Period Start', 'Period End', 'Gross Amount', 'Platform Fee', 'Net Amount', 'Status'],
+        rows
+    );
+}
+
+// Data Export Center: exports whichever dataset is selected.
+async function exportDatasetNow() {
+    const sel = document.getElementById('exportDataset');
+    const dataset = sel ? sel.value : 'users';
+    try {
+        await generateReport(dataset);
+    } catch (err) {
+        console.error(err);
+        alert('Export failed: ' + (err.message || err));
+    }
 }
 
 let wsConn = null;

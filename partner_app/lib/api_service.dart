@@ -4,12 +4,32 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://172.19.144.1:4000/api';
+  static const String baseUrl = 'http://192.168.1.13:4000/api';
   static const String fallbackUrl = 'http://192.168.29.240:4000/api';
 
   static String _activeUrl = baseUrl;
 
   static String get activeUrl => _activeUrl;
+
+  /// Rewrites backend media URLs so they load on-device.
+  /// Uploads created via localhost admin carry a `localhost` host which is
+  /// unreachable from the phone; those (and relative paths) are rebased onto
+  /// the currently active API host. Already-correct URLs pass through.
+  static String resolveMediaUrl(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return trimmed;
+    try {
+      final active = Uri.parse(_activeUrl);
+      if (trimmed.startsWith('/')) {
+        return '${active.scheme}://${active.host}:${active.port}$trimmed';
+      }
+      final parsed = Uri.parse(trimmed);
+      if (parsed.host == 'localhost' || parsed.host == '127.0.0.1') {
+        return parsed.replace(host: active.host, port: active.port).toString();
+      }
+    } catch (_) {}
+    return trimmed;
+  }
 
   static Future<void> checkServerUrl() async {
     try {
@@ -35,6 +55,34 @@ class ApiService {
   static Future<void> clearToken() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
+  }
+
+  /// Normalizes an Indian mobile number to E.164 (`+91XXXXXXXXXX`).
+  /// Accepts 10-digit numbers with or without +91 / 91 / 0 prefixes and
+  /// never duplicates the country code in the stored value.
+  static String normalizeIndianPhone(String input) {
+    var digits = input.replaceAll(RegExp(r'\D'), '');
+    // Strip domestic trunk zeros: 09876543210 -> 9876543210
+    while (digits.startsWith('0') && digits.length > 10) {
+      digits = digits.substring(1);
+    }
+    // Strip repeated country codes: +91 91... -> single +91
+    while (digits.startsWith('91') && digits.length > 10) {
+      digits = digits.substring(2);
+    }
+    return '+91$digits';
+  }
+
+  /// True when [input] holds exactly one 10-digit Indian mobile number.
+  static bool isValidIndianPhone(String input) {
+    return RegExp(r'^\+91\d{10}$').hasMatch(normalizeIndianPhone(input));
+  }
+
+  /// The 10-digit national part for display/prefill,
+  /// e.g. '+919876543210' -> '9876543210'.
+  static String nationalMobileNumber(String? stored) {
+    if (stored == null || stored.isEmpty) return '';
+    return normalizeIndianPhone(stored).replaceFirst('+91', '');
   }
 
   static Future<Map<String, String>> _headers() async {
@@ -77,14 +125,14 @@ class ApiService {
     return data;
   }
 
-  static Future<Map<String, dynamic>> googleLogin(String email, String name) async {
+  static Future<Map<String, dynamic>> googleLogin(String idToken) async {
     await checkServerUrl();
+
     final res = await http.post(
       Uri.parse('$_activeUrl/auth/google'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'email': email,
-        'name': name,
+        'idToken': idToken,
         'role': 'partner',
       }),
     );
@@ -115,7 +163,7 @@ class ApiService {
       headers: await _headers(),
       body: jsonEncode({
         if (fcmToken != null) 'fcm_token': fcmToken,
-        if (phoneNumber != null) 'phone_number': phoneNumber,
+        if (phoneNumber != null) 'phone_number': phoneNumber.isEmpty ? phoneNumber : normalizeIndianPhone(phoneNumber),
         if (email != null) 'email': email,
         if (bankName != null) 'bank_name': bankName,
         if (bankAccountNo != null) 'bank_account_no': bankAccountNo,
@@ -253,6 +301,11 @@ class ApiService {
 
   static Future<Map<String, dynamic>> checkinBooking(String bookingId) async {
     final res = await http.patch(Uri.parse('$_activeUrl/partner/bookings/$bookingId/checkin'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> collectVenueCash(String bookingId) async {
+    final res = await http.patch(Uri.parse('$_activeUrl/partner/bookings/$bookingId/collect-cash'), headers: await _headers());
     return jsonDecode(res.body);
   }
 

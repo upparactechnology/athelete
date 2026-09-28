@@ -1531,19 +1531,19 @@
                             <h2>System Activity Reports</h2>
                         </div>
                         <div style="padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating User Report PDF...')">
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="handleReportClick('users', this)">
                                 <div class="kpi-title">User Signups Report</div>
                                 <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">Summary of user registrations, activity status, locations.</div>
                             </div>
-                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating Venue Report PDF...')">
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="handleReportClick('venues', this)">
                                 <div class="kpi-title">Venue Listings Report</div>
                                 <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">Analytics of slots utilization, sports, and rating stats.</div>
                             </div>
-                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating Booking Report PDF...')">
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="handleReportClick('bookings', this)">
                                 <div class="kpi-title">Bookings Ledger Report</div>
                                 <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">Full overview of confirmed, pending, and cancelled bookings.</div>
                             </div>
-                            <div class="kpi-card accent" style="cursor: pointer;" onclick="alert('Generating Revenue Report PDF...')">
+                            <div class="kpi-card accent" style="cursor: pointer;" onclick="handleReportClick('financial', this)">
                                 <div class="kpi-title">Financial Audit Report</div>
                                 <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-secondary);">GST calculations, commission shares, platform payouts.</div>
                             </div>
@@ -1570,7 +1570,7 @@
                             <div>
                                 <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">Format</label>
                                 <div style="display: flex; gap: 10px;">
-                                    <button class="btn-primary" onclick="alert('Exporting dataset as CSV format...')">Export CSV</button>
+                                    <button class="btn-primary" onclick="exportDatasetNow()">Export CSV</button>
                                     <button class="btn-primary" onclick="alert('Exporting dataset as Excel format...')">Export Excel</button>
                                     <button class="btn-primary" onclick="alert('Exporting dataset as PDF format...')">Export PDF</button>
                                 </div>
@@ -1817,9 +1817,11 @@
                     <div class="form-group">
                         <label>Status</label>
                         <select class="form-control" id="booking-status" required>
-                            <option value="PENDING">PENDING</option>
-                            <option value="CONFIRMED">CONFIRMED</option>
+                            <option value="PENDING">PENDING (payment pending)</option>
+                            <option value="CONFIRMED">CONFIRMED (payment verified)</option>
                             <option value="CANCELLED">CANCELLED</option>
+                            <option value="EXPIRED">EXPIRED (payment deadline passed)</option>
+                            <option value="COMPLETED">COMPLETED</option>
                         </select>
                     </div>
                 </div>

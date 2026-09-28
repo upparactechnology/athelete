@@ -56,6 +56,12 @@ function pick<T extends Record<string, any>>(obj: T | null | undefined, keys: re
 function stripForbidden<T>(obj: T): T {
   if (!obj || typeof obj !== 'object') return obj;
   if (Array.isArray(obj)) return obj.map(stripForbidden) as unknown as T;
+  // Value objects must pass through untouched: recursing into them with
+  // Object.entries destroys them (Date -> {}, Prisma Decimal -> {s,e,d}),
+  // which corrupts every sanitized booking graph (slot dates, amounts).
+  if (obj instanceof Date) return obj;
+  const proto = Object.getPrototypeOf(obj);
+  if (proto !== Object.prototype && proto !== null) return obj;
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (FORBIDDEN_KEYS.has(k)) continue;
@@ -164,6 +170,46 @@ export interface WebhookTransition {
  * - CONFIRMED + match        -> converge (txn->success only, no stat double-count)
  * - any other status + match -> record_truthful (money captured; booking untouched)
  */
+export type FailedPaymentAction = 'release' | 'no_op';
+
+export interface FailedPaymentTransition {
+  action: FailedPaymentAction;
+  /** Whether the booking row may transition PENDING -> CANCELLED. */
+  releaseBooking: boolean;
+  /** Whether the held slot may be released back to available. */
+  releaseSlot: boolean;
+  reason: string;
+}
+
+/**
+ * Pure state machine for the `payment.failed` webhook, mirroring
+ * resolveWebhookTransition so failure handling is unit testable:
+ * - settled (success) transaction      -> no_op (a capture already won)
+ * - PENDING booking                    -> release (PENDING -> CANCELLED + slot)
+ * - CONFIRMED/CANCELLED/EXPIRED/...    -> no_op (never touch settled bookings)
+ *
+ * The caller must still apply the transition conditionally
+ * (updateMany where status = PENDING) so concurrent writers can never
+ * produce CONFIRMED-after-CANCELLED or a double slot release.
+ */
+export function resolveFailedPaymentTransition(
+  bookingStatus: string | undefined | null,
+  txnStatus: string | undefined | null
+): FailedPaymentTransition {
+  if (txnStatus === 'success') {
+    return { action: 'no_op', releaseBooking: false, releaseSlot: false, reason: 'transaction-already-success' };
+  }
+  if (bookingStatus === 'PENDING') {
+    return { action: 'release', releaseBooking: true, releaseSlot: true, reason: 'pending-payment-failed' };
+  }
+  return {
+    action: 'no_op',
+    releaseBooking: false,
+    releaseSlot: false,
+    reason: `booking-not-pending:${bookingStatus ?? 'unknown'}`,
+  };
+}
+
 export function resolveWebhookTransition(
   bookingStatus: string | undefined | null,
   amountOk: boolean,

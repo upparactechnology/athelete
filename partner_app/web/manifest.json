@@ -1,6 +1,6 @@
 {
-    "name": "partner_app",
-    "short_name": "partner_app",
+    "name": "Athletespov Partner",
+    "short_name": "Athletespov Partner",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
