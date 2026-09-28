@@ -268,6 +268,24 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
+  Future<void> _initializeGoogleSignIn() async {
+    if (_isGoogleSignInInitialized) return;
+
+    debugPrint('[GoogleAuth] initialize started');
+    await GoogleSignIn.instance.initialize(
+      serverClientId:
+          '239542933796-07n2hl6ehh9sioac43ljhetai1a3jhgu.apps.googleusercontent.com',
+    );
+    _isGoogleSignInInitialized = true;
+    debugPrint('[GoogleAuth] initialize completed');
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeGoogleSignIn();
+  }
+
   @override
   void dispose() {
     _countdownTimer?.cancel();
@@ -378,20 +396,22 @@ class _LoginScreenState extends State<LoginScreen> {
   void _handleGoogleSignIn() async {
     setState(() => _isLoading = true);
     try {
-      if (!_isGoogleSignInInitialized) {
-        await GoogleSignIn.instance.initialize(
-          serverClientId: '239542933796-07n2hl6ehh9sioac43ljhetai1a3jhgu.apps.googleusercontent.com',
-        );
-        _isGoogleSignInInitialized = true;
-      }
-      
+      debugPrint('[GoogleAuth] authenticate started');
       final GoogleSignInAccount account = await GoogleSignIn.instance.authenticate();
+      debugPrint('[GoogleAuth] authenticate returned');
 
       final String? idToken = account.authentication.idToken;
 
       if (idToken == null || idToken.isEmpty) {
-        throw Exception('Google did not return an ID token');
+        debugPrint('[GoogleAuth] ID token missing');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Google did not return an ID token')),
+          );
+        }
+        return;
       }
+      debugPrint('[GoogleAuth] ID token received');
 
       showDialog(
         context: context,
@@ -458,15 +478,21 @@ class _LoginScreenState extends State<LoginScreen> {
           );
         }
       }
-    } catch (e) {
-      debugPrint("GOOGLE SIGN IN EXCEPTION: $e");
+    } on GoogleSignInException catch (e) {
+      debugPrint('[GoogleAuth] authenticate failed: ${e.code} - ${e.description}');
       if (mounted) {
-        String msg = 'Google Sign-In error: $e';
-        if (e is GoogleSignInException) {
-          msg = 'Google Sign-In Exception (${e.code}): ${e.description ?? "No message"}';
-        }
+        final String msg = e.code == GoogleSignInExceptionCode.canceled
+            ? 'Sign-in canceled'
+            : 'Google Sign-In failed: ${e.description ?? e.code}';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
+        );
+      }
+    } catch (e) {
+      debugPrint('[GoogleAuth] unexpected error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Google Sign-In error: $e')),
         );
       }
     } finally {
