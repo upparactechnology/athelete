@@ -3,9 +3,11 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- NOTE (Play policy): gallery images are selected via the Android system
+         Photo Picker (image_picker with useAndroidPhotoPicker=true), which
+         grants per-item URI access. Broad media/storage permissions
+         (READ_MEDIA_IMAGES / READ_MEDIA_VIDEO / READ_EXTERNAL_STORAGE /
+         WRITE_EXTERNAL_STORAGE) are intentionally NOT declared. -->
 
     <application
         android:label="Athletespov Partner"

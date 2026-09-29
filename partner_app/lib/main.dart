@@ -11,6 +11,8 @@ import 'websocket_sync.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:image_picker_android/image_picker_android.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
@@ -19,7 +21,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:webview_flutter/webview_flutter.dart';
 
 // -------------------------------------------------------------
@@ -86,6 +88,15 @@ String formatINR(dynamic value) {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Use the Android system Photo Picker for gallery selection (no broad
+  // media/storage permission required on Android 13+). Camera capture still
+  // uses ImageSource.camera with the CAMERA permission requested on demand.
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    final ImagePickerPlatform platform = ImagePickerPlatform.instance;
+    if (platform is ImagePickerAndroid) {
+      platform.useAndroidPhotoPicker = true;
+    }
+  }
   await ApiService.checkServerUrl();
   runApp(const PartnerPOVApp());
 }
@@ -1173,11 +1184,14 @@ class _HomeTabState extends State<HomeTab> with WidgetsBindingObserver {
   }
 
   void _requestAppPermissions() async {
+    // Gallery selection uses the Android system Photo Picker, which grants
+    // per-item URI access without broad media/storage permissions, so do NOT
+    // request Permission.photos / Permission.videos / Permission.storage here.
+    // Camera permission is requested on demand where capture is used; the
+    // startup request below is preserved for existing behavior.
     try {
       await [
         Permission.camera,
-        Permission.photos,
-        Permission.storage,
       ].request();
     } catch (_) {}
   }
@@ -3629,14 +3643,9 @@ class _AddVenueWizardScreenState extends State<AddVenueWizardScreen> {
           _showValidationError("Camera permission is required to capture photos.");
           return;
         }
-      } else {
-        final status = await Permission.photos.request();
-        final storageStatus = await Permission.storage.request();
-        if (status != PermissionStatus.granted && storageStatus != PermissionStatus.granted) {
-          _showValidationError("Gallery access permission is required to select photos.");
-          return;
-        }
       }
+      // Gallery path: intentionally no Permission.photos/storage request.
+      // The Android system Photo Picker grants access to the selected item.
 
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(

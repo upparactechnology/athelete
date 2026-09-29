@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+2
+version: 1.0.0+4
 
 environment:
   sdk: ^3.9.2
@@ -40,6 +40,10 @@ dependencies:
   geolocator: ^14.0.2
   permission_handler: ^11.3.1
   image_picker: ^1.1.2
+  # Direct dependency: used to enable the Android system Photo Picker
+  # (ImagePickerAndroid.useAndroidPhotoPicker). No media permissions needed.
+  image_picker_android: ^0.8.13
+  image_picker_platform_interface: ^2.10.0
   mobile_scanner: ^7.2.0
   google_fonts: ^6.2.1
   google_sign_in: ^7.2.0
