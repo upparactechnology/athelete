@@ -39,7 +39,7 @@ clientRoutes.get('/partner/kyc/:docId/file', authorize('partner'), ClientControl
 // Profile
 clientRoutes.get('/users/me', ClientController.getProfile);
 clientRoutes.patch('/users/me', ClientController.updateProfile);
-clientRoutes.delete('/users/me', ClientController.deleteProfile);
+clientRoutes.delete('/users/me', sessionLimiter, ClientController.deleteProfile);
 
 // Wishlist
 clientRoutes.get('/users/me/wishlist', ClientController.getWishlist);

@@ -7978,7 +7978,7 @@ class _ProfileTabState extends State<ProfileTab> {
       child: ListTile(
         leading: const Icon(Icons.delete_forever_rounded, color: Colors.redAccent),
         title: const Text("Delete Partner Account", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 14)),
-        subtitle: const Text("Permanently remove all venues and slots data", style: TextStyle(color: Colors.redAccent, fontSize: 11)),
+        subtitle: const Text("Anonymize account and unlist venues", style: TextStyle(color: Colors.redAccent, fontSize: 11)),
         trailing: const Icon(Icons.chevron_right_rounded, color: Colors.redAccent),
         onTap: () {
           showDialog(
@@ -7990,7 +7990,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 title: const Text("Delete Account", style: TextStyle(color: Colors.redAccent)),
                 content: const Text(
-                  "Warning: This action is permanent and all associated venues, slots, and balance data will be immediately removed.",
+                  "Warning: This action is permanent. Your account identity will be anonymized and your venues will be unlisted. Historical bookings, payments, settlements, disputes and other records may be retained where required.",
                   style: TextStyle(color: Colors.redAccent),
                 ),
                 actions: [

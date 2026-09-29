@@ -508,53 +508,85 @@ export class ClientService {
     // (bookings, transactions, disputes, reviews, settlements) stays intact
     // while credentials, sessions, tokens, and PII are removed/disabled.
     if (role === 'partner') {
-      await prisma.venue.updateMany({ where: { partner_id: id }, data: { status: 'unlisted' } });
+      const partner = await prisma.partner.findUnique({ where: { partner_id: id } });
+      if (!partner) throw new NotFoundError("Partner profile not found");
+      // Revoke sessions before anonymizing so the account cannot act while
+      // the deletion runs. The authenticate/refresh gates also reject
+      // kyc_status='deleted' accounts, so any surviving access token is
+      // unusable once the transaction below commits.
       await revokeAllSessions(id);
-      await prisma.partner.update({
-        where: { partner_id: id },
-        data: {
-          phone_number: `deleted-partner-${id}`,
-          email: `deleted-partner-${id}@athletepov.com`,
-          avatar_url: null,
-          fcm_token: null,
-          password_hash: null,
-          kyc_status: 'deleted',
-          gst_number: null,
-          pan_number: null,
-          aadhaar_number: null,
-          bank_name: null,
-          bank_account_no: null,
-          bank_ifsc: null,
-          temp_bank_name: null,
-          temp_bank_account_no: null,
-          temp_bank_ifsc: null,
+      await prisma.$transaction(async (tx) => {
+        await tx.venue.updateMany({ where: { partner_id: id }, data: { status: 'unlisted' } });
+        // Partner OTP records are keyed by the raw phone/email string only;
+        // both are read from the partner row above, so only this account's
+        // records can match. Best-effort like the user branch below.
+        if (partner.phone_number) {
+          await tx.otpLog.deleteMany({ where: { phone_number: partner.phone_number } }).catch(() => undefined);
         }
+        if (partner.email) {
+          await tx.otpLog.deleteMany({ where: { phone_number: partner.email } }).catch(() => undefined);
+        }
+        await tx.partner.update({
+          where: { partner_id: id },
+          data: {
+            phone_number: `deleted-partner-${id}`,
+            email: `deleted-partner-${id}@athletepov.com`,
+            avatar_url: null,
+            fcm_token: null,
+            password_hash: null,
+            kyc_status: 'deleted',
+            gst_number: null,
+            pan_number: null,
+            aadhaar_number: null,
+            bank_name: null,
+            bank_account_no: null,
+            bank_ifsc: null,
+            temp_bank_name: null,
+            temp_bank_account_no: null,
+            temp_bank_ifsc: null,
+          }
+        });
       });
+      // Audit trail uses the existing Redis audit-log mechanism (same shape as
+      // admin deletion). Kept outside the DB transaction: Redis is not part of
+      // the Prisma transaction, and a logging failure must not roll back an
+      // already-committed deletion. No PII, tokens, or secrets are recorded.
+      try {
+        await AdminService.addAuditLog(id, 'Delete Partner Account', id, 'SUCCESS');
+      } catch (err) {
+        console.warn('Self-service partner deletion audit log failed:', err);
+      }
       return { deleted: true, anonymized: true };
     } else {
       const user = await prisma.user.findUnique({ where: { user_id: id } });
+      if (!user) throw new NotFoundError("User profile not found");
       await revokeAllSessions(id);
-      if (user) {
-        await prisma.otpLog.deleteMany({ where: { phone_number: user.phone_number } }).catch(() => undefined);
+      await prisma.$transaction(async (tx) => {
+        await tx.otpLog.deleteMany({ where: { phone_number: user.phone_number } }).catch(() => undefined);
         if (user.email) {
-          await prisma.otpLog.deleteMany({ where: { phone_number: user.email } }).catch(() => undefined);
+          await tx.otpLog.deleteMany({ where: { phone_number: user.email } }).catch(() => undefined);
         }
-      }
-      await prisma.oAuthIdentity.deleteMany({ where: { user_id: id } }).catch(() => undefined);
-      await prisma.user.update({
-        where: { user_id: id },
-        data: {
-          phone_number: `deleted-user-${id}`,
-          email: null,
-          name: 'Deleted Athlete',
-          password_hash: null,
-          fcm_token: null,
-          avatar_url: null,
-          city: null,
-          state: null,
-          status: 'Deleted',
-        }
+        await tx.oAuthIdentity.deleteMany({ where: { user_id: id } }).catch(() => undefined);
+        await tx.user.update({
+          where: { user_id: id },
+          data: {
+            phone_number: `deleted-user-${id}`,
+            email: null,
+            name: 'Deleted Athlete',
+            password_hash: null,
+            fcm_token: null,
+            avatar_url: null,
+            city: null,
+            state: null,
+            status: 'Deleted',
+          }
+        });
       });
+      try {
+        await AdminService.addAuditLog(id, 'Delete User Account', id, 'SUCCESS');
+      } catch (err) {
+        console.warn('Self-service user deletion audit log failed:', err);
+      }
       return { deleted: true, anonymized: true };
     }
   }
