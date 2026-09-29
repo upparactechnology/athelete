@@ -21,6 +21,9 @@ export const otpRequestLimiter = limiter(10 * 60 * 1000, 5);
 /** OTP verification attempts: max 10 per 10 minutes per IP. */
 export const otpVerifyLimiter = limiter(10 * 60 * 1000, 10);
 
+/** Password login attempts: max 10 per 10 minutes per IP. */
+export const loginLimiter = limiter(10 * 60 * 1000, 10);
+
 /** Google login attempts: max 20 per 10 minutes per IP. */
 export const googleLoginLimiter = limiter(10 * 60 * 1000, 20);
 

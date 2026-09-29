@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { ClientController } from './client.controller.js';
 import { authenticate } from '../../middleware/authenticate.js';
 import { authorize } from '../../middleware/authorize.js';
-import { googleLoginLimiter, otpRequestLimiter, otpVerifyLimiter, paymentVerifyLimiter, sessionLimiter } from '../../middleware/rateLimit.js';
+import { googleLoginLimiter, loginLimiter, otpRequestLimiter, otpVerifyLimiter, paymentVerifyLimiter, sessionLimiter } from '../../middleware/rateLimit.js';
 import { upload, uploadPrivate } from '../../middleware/upload.js';
 
 export const clientRoutes = Router();
@@ -10,6 +10,7 @@ export const clientRoutes = Router();
 // Public Authentication (rate-limited brute-force protection)
 clientRoutes.post('/auth/request-otp', otpRequestLimiter, ClientController.requestOtp);
 clientRoutes.post('/auth/verify-otp', otpVerifyLimiter, ClientController.verifyOtp);
+clientRoutes.post('/auth/login', loginLimiter, ClientController.login);
 clientRoutes.post('/auth/google', googleLoginLimiter, ClientController.googleLogin);
 // P2-7: refresh rotation + logout (public bearer-of-token endpoints).
 clientRoutes.post('/auth/refresh', sessionLimiter, ClientController.refreshAccessToken);

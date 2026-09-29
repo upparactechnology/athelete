@@ -603,26 +603,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await ApiService.verifyOtp(_phoneController.text.trim(), _otpController.text.trim());
       if (response['success'] == true) {
-        WebSocketSyncManager.connect();
-        if (!mounted) return;
-        final profileRes = await ApiService.getProfile();
-        final profile = profileRes['data'] ?? {};
-        final phoneNumber = profile['phone_number'] ?? '';
-        
-        if (phoneNumber.contains('@')) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
-            ),
-          );
-          return;
-        }
-
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
-          ),
-        );
+        await _completeLogin();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(response['error']?['message'] ?? response['message'] ?? 'Verification failed')),
@@ -636,6 +617,73 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  /// Direct email + password login (no OTP). Used for existing accounts;
+  /// new accounts still verify OTP through the sign-up flow.
+  void _loginDirect() async {
+    FocusScope.of(context).unfocus();
+    final email = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter an email address')),
+      );
+      return;
+    }
+    if (!email.contains('@') || !email.contains('.')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a valid email address')),
+      );
+      return;
+    }
+    if (password.isEmpty || password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password must be at least 6 characters long')),
+      );
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final response = await ApiService.login(email, password: password);
+      if (response['success'] == true) {
+        await _completeLogin();
+      } else {
+        final message = response['error']?['message'] ?? response['message'] ?? 'Login failed';
+        if (mounted) _handleAccountGuidance(message);
+      }
+    } catch (e) {
+      debugPrint("Error logging in: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Login error: $e')),
+      );
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  /// Shared post-authentication routing (OTP verify, direct login, Google).
+  Future<void> _completeLogin() async {
+    WebSocketSyncManager.connect();
+    if (!mounted) return;
+    final profileRes = await ApiService.getProfile();
+    final profile = profileRes['data'] ?? {};
+    final phoneNumber = profile['phone_number'] ?? '';
+
+    if (phoneNumber.contains('@')) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
+        ),
+      );
+      return;
+    }
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
+      ),
+    );
   }
 
   void _handleGoogleSignIn() async {
@@ -849,7 +897,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ],
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: _isLoading ? null : _requestOtp,
+                    onPressed: _isLoading ? null : (_isSignUp ? _requestOtp : _loginDirect),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.pink,
                       padding: const EdgeInsets.symmetric(vertical: 16),

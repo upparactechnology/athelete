@@ -322,6 +322,91 @@ export class ClientService {
   }
 
   /**
+   * Password login: direct email/phone + password authentication (no OTP).
+   * Used for logging into an EXISTING account. New accounts must still go
+   * through request-otp so email/phone ownership is verified by OTP.
+   * Returns the same session shape as verifyOtp.
+   */
+  public static async login(phoneNumber: string, password?: string, role: string = 'partner') {
+    const safeRole = normalizeAuthRole(role, 'partner');
+    if (!phoneNumber || typeof phoneNumber !== 'string') {
+      throw new ValidationError("Email or phone number is required");
+    }
+    if (!password) {
+      throw new ValidationError("Password is required to log in");
+    }
+    if (safeRole === 'partner') {
+      const partner = await prisma.partner.findFirst({
+        where: {
+          OR: [
+            { email: phoneNumber },
+            { phone_number: phoneNumber }
+          ]
+        }
+      });
+      if (!partner) {
+        throw new ValidationError("Account does not exist. Please sign up.");
+      }
+      const partnerObj = partner as any;
+      if (partnerObj.kyc_status === 'deleted') {
+        throw new UnauthorizedError("This account is no longer active. Please contact support.");
+      }
+      if (!partnerObj.password_hash) {
+        throw new ValidationError("This account uses Google sign-in. Please continue with Google.");
+      }
+      const isPasswordCorrect = await bcrypt.compare(password, partnerObj.password_hash);
+      if (!isPasswordCorrect) {
+        throw new ValidationError("Invalid email/phone or password");
+      }
+      const { accessToken, refreshToken } = await createSession(partner.partner_id, 'partner');
+      return {
+        accessToken,
+        refreshToken,
+        user: {
+          id: partner.partner_id,
+          email: partner.email,
+          phone_number: partner.phone_number,
+          role: 'partner'
+        }
+      };
+    } else {
+      const user = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { email: phoneNumber },
+            { phone_number: phoneNumber }
+          ]
+        }
+      });
+      if (!user) {
+        throw new ValidationError("Account does not exist. Please sign up.");
+      }
+      const userObj = user as any;
+      if (userObj.status && userObj.status !== 'Active') {
+        throw new UnauthorizedError("This account is no longer active. Please contact support.");
+      }
+      if (!userObj.password_hash) {
+        throw new ValidationError("This account uses Google sign-in. Please continue with Google.");
+      }
+      const isPasswordCorrect = await bcrypt.compare(password, userObj.password_hash);
+      if (!isPasswordCorrect) {
+        throw new ValidationError("Invalid email/phone or password");
+      }
+      const { accessToken, refreshToken } = await createSession(user.user_id, 'user');
+      return {
+        accessToken,
+        refreshToken,
+        user: {
+          id: user.user_id,
+          email: user.email,
+          phone_number: user.phone_number,
+          role: 'user'
+        }
+      };
+    }
+  }
+
+  /**
    * OTP verification (P0): no backdoors, hashed comparison, expiry,
    * single-use (all codes for the phone are invalidated on success),
    * and a maximum number of attempts before a fresh code is required.

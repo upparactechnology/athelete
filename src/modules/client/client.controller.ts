@@ -37,6 +37,18 @@ export class ClientController {
     }
   }
 
+  public static async login(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      // Direct email/phone + password login (no OTP). The identifier may be
+      // an email address or phone number; the role selects the account table.
+      const { phoneNumber, password, role } = req.body;
+      const data = await ClientService.login(phoneNumber, password, role || 'partner');
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
   public static async googleLogin(req: any, res: Response, next: NextFunction) {
     try {
       // The app must send the Google ID token. Email/name from the client

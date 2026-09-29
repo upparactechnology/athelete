@@ -127,6 +127,20 @@ class ApiService {
     return data;
   }
 
+  static Future<Map<String, dynamic>> login(String phoneNumber, {required String password}) async {
+    await checkServerUrl();
+    final res = await http.post(
+      Uri.parse('$_activeUrl/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'phoneNumber': phoneNumber, 'password': password, 'role': 'user'}),
+    );
+    final data = jsonDecode(res.body);
+    if (data['success'] == true && data['data']?['accessToken'] != null) {
+      await setToken(data['data']['accessToken']);
+    }
+    return data;
+  }
+
   static Future<Map<String, dynamic>> googleLogin(String idToken) async {
     await checkServerUrl();
     final res = await http.post(

@@ -828,31 +828,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await ApiService.verifyOtp(_phoneController.text.trim(), _otpController.text.trim());
       if (response['success'] == true) {
-        WebSocketSyncManager.connect();
-        if (!mounted) return;
-        try {
-          final profileRes = await ApiService.getProfile();
-          if (profileRes['success'] == true) {
-            final profile = profileRes['data'] ?? {};
-            final phoneNumber = profile['phone_number'] ?? '';
-            if (phoneNumber.contains('@') || phoneNumber.isEmpty) {
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
-                ),
-              );
-              return;
-            }
-          }
-        } catch (e) {
-          debugPrint("Error fetching profile: $e");
-        }
-
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
-          ),
-        );
+        await _completeLogin();
       } else {
         AppToast.show(context, response['error']?['message'] ?? response['message'] ?? 'Verification failed', isError: true);
       }
@@ -862,6 +838,70 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Direct email + password login (no OTP). Used for existing accounts;
+  /// new accounts still verify OTP through the sign-up flow.
+  void _loginDirect() async {
+    FocusScope.of(context).unfocus();
+    final email = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+    if (email.isEmpty) {
+      AppToast.show(context, 'Please enter an email address', isError: true);
+      return;
+    }
+    if (!email.contains('@') || !email.contains('.')) {
+      AppToast.show(context, 'Please enter a valid email address', isError: true);
+      return;
+    }
+    if (password.isEmpty || password.length < 6) {
+      AppToast.show(context, 'Password must be at least 6 characters long', isError: true);
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final response = await ApiService.login(email, password: password);
+      if (response['success'] == true) {
+        await _completeLogin();
+      } else {
+        final message = response['error']?['message'] ?? response['message'] ?? 'Login failed';
+        if (mounted) _handleAccountGuidance(message);
+      }
+    } catch (e) {
+      debugPrint("Error logging in: $e");
+      AppToast.show(context, 'Login error: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  /// Shared post-authentication routing (OTP verify, direct login, Google).
+  Future<void> _completeLogin() async {
+    WebSocketSyncManager.connect();
+    if (!mounted) return;
+    try {
+      final profileRes = await ApiService.getProfile();
+      if (profileRes['success'] == true) {
+        final profile = profileRes['data'] ?? {};
+        final phoneNumber = profile['phone_number'] ?? '';
+        if (phoneNumber.contains('@') || phoneNumber.isEmpty) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
+            ),
+          );
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching profile: $e");
+    }
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
+      ),
+    );
   }
 
   void _handleGoogleSignIn() async {
@@ -1101,7 +1141,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: ElevatedButton(
-                            onPressed: _isLoading ? null : _requestOtp,
+                            onPressed: _isLoading ? null : (_isSignUp ? _requestOtp : _loginDirect),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
                               shadowColor: Colors.transparent,
@@ -4274,6 +4314,41 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
     }
   }
 
+  /// Direct email + password login (no OTP) for existing accounts.
+  void _loginDirect() async {
+    final email = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+    if (email.isEmpty) {
+      AppToast.show(context, "Please enter email address", isError: true);
+      return;
+    }
+    if (!email.contains('@') || !email.contains('.')) {
+      AppToast.show(context, "Please enter a valid email address", isError: true);
+      return;
+    }
+    if (password.isEmpty || password.length < 6) {
+      AppToast.show(context, "Password must be at least 6 characters long", isError: true);
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final res = await ApiService.login(email, password: password);
+      if (res['success'] == true) {
+        WebSocketSyncManager.connect();
+        AppToast.show(context, "Login Successful!");
+        Navigator.pop(context);
+        widget.onSuccess();
+      } else {
+        final message = res['error']?['message'] ?? res['message'] ?? "Login failed";
+        if (mounted) _handleAccountGuidance(message);
+      }
+    } catch (e) {
+      AppToast.show(context, "Login error: $e", isError: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   void _handleGoogleSignIn() async {
     setState(() => _loading = true);
     try {
@@ -4404,7 +4479,7 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _loading ? null : _sendOtp,
+                  onPressed: _loading ? null : (_isSignUp ? _sendOtp : _loginDirect),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.pink,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
