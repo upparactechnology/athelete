@@ -13,10 +13,16 @@
 
     <!-- Header -->
     <header class="coming-soon-header">
-        <div class="container nav-container" style="justify-content: center;">
-            <a href="#" class="logo-wrapper">
-                <img src="../logos/dark.png" alt="Athlete's POV Logo" class="logo-img" onerror="this.src='../logos/logo-name.png'">
+        <div class="container nav-container">
+            <a href="./" class="logo-wrapper" aria-label="Athlete's POV home">
+                <img src="../logos/dark.png" alt="Athlete's POV Logo" class="logo-img" onerror="this.onerror=null;this.src='../logos/logo-name.png'">
             </a>
+            <nav class="nav-menu" aria-label="Primary">
+                <a href="./" class="nav-link active">Home</a>
+                <a href="./legal/" class="nav-link">Legal</a>
+                <a href="./privacy-policy/" class="nav-link">Privacy</a>
+                <a href="./terms/" class="nav-link">Terms</a>
+            </nav>
         </div>
     </header>
 
@@ -107,9 +113,41 @@
     </section>
 
     <!-- Footer -->
-    <footer class="coming-soon-footer">
+    <footer class="site-footer">
         <div class="container">
-            <div class="footer-bottom" style="border-top: none; padding-top: 0; margin-top: 0;">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <a href="./" aria-label="Athlete's POV home">
+                        <img src="../logos/dark.png" alt="Athlete's POV Logo" class="logo-img" onerror="this.onerror=null;this.src='../logos/logo-name.png'">
+                    </a>
+                    <p>The premier sports venue booking &amp; turf management ecosystem. Something big is coming soon.</p>
+                </div>
+                <div>
+                    <h3 class="footer-heading">Legal</h3>
+                    <ul class="footer-links">
+                        <li><a href="./privacy-policy/">Privacy Policy</a></li>
+                        <li><a href="./terms/">Terms of Service</a></li>
+                        <li><a href="./cancellation-refund/">Cancellation &amp; Refund Policy</a></li>
+                        <li><a href="./player-waiver/">Player Waiver</a></li>
+                        <li><a href="./community-guidelines/">Community Guidelines</a></li>
+                        <li><a href="./dispute-resolution/">Dispute Resolution</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="footer-heading">Partner Agreements</h3>
+                    <ul class="footer-links">
+                        <li><a href="./legal/venue-partner-agreement/">Venue Partner Agreement</a></li>
+                        <li><a href="./legal/coach-academy-partner-agreement/">Coach &amp; Academy Agreement</a></li>
+                        <li><a href="./legal/athlete-representation-agreement/">Athlete Representation</a></li>
+                        <li><a href="./legal/marketplace-seller-agreement/">Marketplace Seller Agreement</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="footer-heading">Contact</h3>
+                    <p class="footer-contact">Support: <a href="mailto:contact@athletespov.com">contact@athletespov.com</a><br>Help Centre: available within the app</p>
+                </div>
+            </div>
+            <div class="footer-bottom">
                 <p>&copy; 2026 Athlete's POV (APOV). All rights reserved.</p>
                 <p>Designed with <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="color: var(--accent-pink); display: inline-block; vertical-align: middle; margin: -2px 2px 0 2px;"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"></path></svg> for Athletes and Sports Venue Owners.</p>
             </div>
