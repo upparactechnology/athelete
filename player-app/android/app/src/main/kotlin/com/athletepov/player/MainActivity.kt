@@ -1,4 +1,4 @@
-package com.athletepov.player.player_app
+package com.athletepov.player
 
 import io.flutter.embedding.android.FlutterActivity
 
