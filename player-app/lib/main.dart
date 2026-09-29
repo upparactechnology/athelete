@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'dart:ui';
@@ -521,9 +522,14 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _isSignUp = false;
   bool _passwordVisible = false;
+  bool _termsAccepted = false;
   bool _isGoogleSignInInitialized = false;
   int _resendCountdown = 0;
   Timer? _countdownTimer;
+
+  static const String _termsUrl = 'https://athletespov.com/terms/';
+  static const String _privacyUrl = 'https://athletespov.com/privacy-policy/';
+  static const String _supportEmail = 'contact@athletespov.com';
 
   void _startResendTimer() {
     setState(() => _resendCountdown = 30);
@@ -564,6 +570,10 @@ class _LoginScreenState extends State<LoginScreen> {
       AppToast.show(context, 'Password must be at least 6 characters long', isError: true);
       return;
     }
+    if (_isSignUp && !_termsAccepted) {
+      AppToast.show(context, 'Please accept the Terms of Service and Privacy Policy to create an account', isError: true);
+      return;
+    }
 
     setState(() => _isLoading = true);
     try {
@@ -579,7 +589,8 @@ class _LoginScreenState extends State<LoginScreen> {
         _startResendTimer();
         AppToast.show(context, response['data']?['message'] ?? response['message'] ?? 'OTP Sent!');
       } else {
-        AppToast.show(context, response['message'] ?? 'Failed to request OTP', isError: true);
+        final message = response['message'] ?? 'Failed to request OTP';
+        if (mounted) _handleAccountGuidance(message);
       }
     } catch (e) {
       debugPrint("Error requesting OTP: $e");
@@ -587,6 +598,227 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Shows a guided next step when the account state mismatches the current
+  /// mode (login vs sign-up), otherwise falls back to a plain error toast.
+  void _handleAccountGuidance(String message) {
+    final lower = message.toLowerCase();
+    if (!_isSignUp && lower.contains('does not exist')) {
+      _showSwitchModeDialog(
+        title: 'No account found',
+        body: 'There is no athlete account for this email yet. Create one now to continue.',
+        actionLabel: 'Create account',
+        onAction: () => setState(() {
+          _isSignUp = true;
+          _termsAccepted = false;
+          _otpRequested = false;
+        }),
+      );
+      return;
+    }
+    if (_isSignUp && lower.contains('already exists')) {
+      _showSwitchModeDialog(
+        title: 'Account already exists',
+        body: 'An account with this email already exists. Sign in instead?',
+        actionLabel: 'Sign in',
+        onAction: () => setState(() {
+          _isSignUp = false;
+          _otpRequested = false;
+        }),
+      );
+      return;
+    }
+    AppToast.show(context, message, isError: true);
+  }
+
+  void _showSwitchModeDialog({
+    required String title,
+    required String body,
+    required String actionLabel,
+    required VoidCallback onAction,
+  }) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(ctx).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(title, style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 17)),
+        content: Text(body, style: GoogleFonts.sora(fontSize: 13, color: Colors.grey)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: GoogleFonts.sora(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onAction();
+              AppToast.show(context, _isSignUp
+                  ? 'Enter a password and accept the policies to create your account'
+                  : 'Enter your credentials to sign in');
+            },
+            child: Text(actionLabel, style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openLegalUrl(String url) async {
+    try {
+      final opened = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!opened && mounted) {
+        AppToast.show(context, 'Could not open link', isError: true);
+      }
+    } catch (e) {
+      if (mounted) AppToast.show(context, 'Could not open link', isError: true);
+    }
+  }
+
+  Future<void> _emailSupport() async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: _supportEmail,
+      query: 'subject=${Uri.encodeComponent('Athlete POV account help')}&body=${Uri.encodeComponent('Hi team,\n\nI need help with my account.\n\nEmail: ${_phoneController.text.trim()}\n')}',
+    );
+    try {
+      final opened = await launchUrl(uri);
+      if (!opened && mounted) {
+        AppToast.show(context, 'Could not open email app. Please write to $_supportEmail', isError: true);
+      }
+    } catch (e) {
+      if (mounted) AppToast.show(context, 'Could not open email app. Please write to $_supportEmail', isError: true);
+    }
+  }
+
+  void _showForgotAccountDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(ctx).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Forgot password?', style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 17)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'If you signed up with Google, just continue with Google below — no password needed.',
+                style: GoogleFonts.sora(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _handleGoogleSignIn();
+                },
+                icon: const Icon(Icons.g_mobiledata_rounded, color: AppColors.pink, size: 24),
+                label: Text('Continue with Google', style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 14)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.white10),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Forgot which email you used, or need a password reset? Email our support team and we will help you recover your account.',
+                style: GoogleFonts.sora(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _emailSupport();
+                },
+                icon: const Icon(Icons.email_outlined, color: AppColors.pink, size: 18),
+                label: Text(_supportEmail, style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 13)),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Close', style: GoogleFonts.sora(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTermsConsent(Color subtextCol) {
+    final linkStyle = GoogleFonts.sora(
+      color: AppColors.pink,
+      fontWeight: FontWeight.bold,
+      fontSize: 12,
+      decoration: TextDecoration.underline,
+    );
+    if (_isSignUp) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Checkbox(
+              value: _termsAccepted,
+              activeColor: AppColors.pink,
+              checkColor: Colors.white,
+              side: const BorderSide(color: Colors.grey),
+              onChanged: (v) => setState(() => _termsAccepted = v ?? false),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+                children: [
+                  const TextSpan(text: 'I agree to the '),
+                  TextSpan(
+                    text: 'Terms of Service',
+                    style: linkStyle,
+                    recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_termsUrl),
+                  ),
+                  const TextSpan(text: ' and '),
+                  TextSpan(
+                    text: 'Privacy Policy',
+                    style: linkStyle,
+                    recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_privacyUrl),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    return Center(
+      child: RichText(
+        textAlign: TextAlign.center,
+        text: TextSpan(
+          style: GoogleFonts.sora(color: subtextCol, fontSize: 12),
+          children: [
+            const TextSpan(text: 'By continuing, you agree to our '),
+            TextSpan(
+              text: 'Terms of Service',
+              style: linkStyle,
+              recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_termsUrl),
+            ),
+            const TextSpan(text: ' and '),
+            TextSpan(
+              text: 'Privacy Policy',
+              style: linkStyle,
+              recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_privacyUrl),
+            ),
+            const TextSpan(text: '.'),
+          ],
+        ),
+      ),
+    );
   }
 
   void _verifyOtp() async {
@@ -841,7 +1073,28 @@ class _LoginScreenState extends State<LoginScreen> {
                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
                           ),
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _isLoading ? null : _showForgotAccountDialog,
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              "Forgot password?",
+                              style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        if (_isSignUp) ...[
+                          _buildTermsConsent(subtextCol),
+                          const SizedBox(height: 8),
+                        ],
+                        const SizedBox(height: 16),
                         Container(
                           decoration: BoxDecoration(
                             gradient: AppColors.brandGradient,
@@ -868,6 +1121,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: GestureDetector(
                             onTap: () => setState(() {
                               _isSignUp = !_isSignUp;
+                              _termsAccepted = false;
                               _passwordController.clear();
                             }),
                             child: Text(
@@ -878,6 +1132,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                         ),
+                        if (!_isSignUp) ...[
+                          const SizedBox(height: 12),
+                          _buildTermsConsent(subtextCol),
+                        ],
                         const SizedBox(height: 24),
                         Row(
                           children: [
@@ -3730,7 +3988,12 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
   bool _loading = false;
   bool _isSignUp = false;
   bool _passwordVisible = false;
+  bool _termsAccepted = false;
   bool _isGoogleSignInInitialized = false;
+
+  static const String _termsUrl = 'https://athletespov.com/terms/';
+  static const String _privacyUrl = 'https://athletespov.com/privacy-policy/';
+  static const String _supportEmail = 'contact@athletespov.com';
 
   @override
   void dispose() {
@@ -3755,6 +4018,10 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
       AppToast.show(context, "Password must be at least 6 characters long", isError: true);
       return;
     }
+    if (_isSignUp && !_termsAccepted) {
+      AppToast.show(context, "Please accept the Terms of Service and Privacy Policy to create an account", isError: true);
+      return;
+    }
     setState(() => _loading = true);
     try {
       final res = await ApiService.requestOtp(
@@ -3766,13 +4033,220 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
         setState(() => _otpSent = true);
         AppToast.show(context, "OTP Sent successfully!");
       } else {
-        AppToast.show(context, res['message'] ?? "Failed to request OTP", isError: true);
+        final message = res['message'] ?? "Failed to request OTP";
+        if (mounted) _handleAccountGuidance(message);
       }
     } catch (e) {
       AppToast.show(context, "Error: $e", isError: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _handleAccountGuidance(String message) {
+    final lower = message.toLowerCase();
+    if (!_isSignUp && lower.contains('does not exist')) {
+      _showSwitchModeDialog(
+        title: 'No account found',
+        body: 'There is no athlete account for this email yet. Create one now to continue.',
+        actionLabel: 'Create account',
+        onAction: () => setState(() {
+          _isSignUp = true;
+          _termsAccepted = false;
+          _otpSent = false;
+        }),
+      );
+      return;
+    }
+    if (_isSignUp && lower.contains('already exists')) {
+      _showSwitchModeDialog(
+        title: 'Account already exists',
+        body: 'An account with this email already exists. Sign in instead?',
+        actionLabel: 'Sign in',
+        onAction: () => setState(() {
+          _isSignUp = false;
+          _otpSent = false;
+        }),
+      );
+      return;
+    }
+    AppToast.show(context, message, isError: true);
+  }
+
+  void _showSwitchModeDialog({
+    required String title,
+    required String body,
+    required String actionLabel,
+    required VoidCallback onAction,
+  }) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF090B10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(title, style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        content: Text(body, style: GoogleFonts.sora(fontSize: 13, color: Colors.grey)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: GoogleFonts.sora(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onAction();
+            },
+            child: Text(actionLabel, style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openLegalUrl(String url) async {
+    try {
+      final opened = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!opened && mounted) {
+        AppToast.show(context, 'Could not open link', isError: true);
+      }
+    } catch (e) {
+      if (mounted) AppToast.show(context, 'Could not open link', isError: true);
+    }
+  }
+
+  void _showForgotAccountDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF090B10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Forgot password?', style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'If you signed up with Google, just continue with Google below — no password needed.',
+                style: GoogleFonts.sora(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _handleGoogleSignIn();
+                },
+                icon: const Icon(Icons.g_mobiledata_rounded, color: AppColors.pink, size: 24),
+                label: Text('Continue with Google', style: GoogleFonts.sora(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.white10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Need a password reset or forgot your email? Write to us and we will help you recover your account.',
+                style: GoogleFonts.sora(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  final uri = Uri(scheme: 'mailto', path: _supportEmail, query: 'subject=${Uri.encodeComponent('Athlete POV account help')}');
+                  try {
+                    if (!await launchUrl(uri) && mounted) {
+                      AppToast.show(context, 'Please write to $_supportEmail', isError: true);
+                    }
+                  } catch (_) {
+                    if (mounted) AppToast.show(context, 'Please write to $_supportEmail', isError: true);
+                  }
+                },
+                icon: const Icon(Icons.email_outlined, color: AppColors.pink, size: 18),
+                label: Text(_supportEmail, style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 13)),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Close', style: GoogleFonts.sora(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSheetTermsConsent() {
+    final linkStyle = GoogleFonts.sora(
+      color: AppColors.pink,
+      fontWeight: FontWeight.bold,
+      fontSize: 12,
+      decoration: TextDecoration.underline,
+    );
+    if (_isSignUp) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Checkbox(
+              value: _termsAccepted,
+              activeColor: AppColors.pink,
+              checkColor: Colors.white,
+              side: const BorderSide(color: Colors.grey),
+              onChanged: (v) => setState(() => _termsAccepted = v ?? false),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: GoogleFonts.sora(color: Colors.grey, fontSize: 12),
+                children: [
+                  const TextSpan(text: 'I agree to the '),
+                  TextSpan(
+                    text: 'Terms of Service',
+                    style: linkStyle,
+                    recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_termsUrl),
+                  ),
+                  const TextSpan(text: ' and '),
+                  TextSpan(
+                    text: 'Privacy Policy',
+                    style: linkStyle,
+                    recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_privacyUrl),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    return Center(
+      child: RichText(
+        textAlign: TextAlign.center,
+        text: TextSpan(
+          style: GoogleFonts.sora(color: Colors.grey, fontSize: 11),
+          children: [
+            const TextSpan(text: 'By continuing, you agree to our '),
+            TextSpan(
+              text: 'Terms of Service',
+              style: linkStyle,
+              recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_termsUrl),
+            ),
+            const TextSpan(text: ' and '),
+            TextSpan(
+              text: 'Privacy Policy',
+              style: linkStyle,
+              recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_privacyUrl),
+            ),
+            const TextSpan(text: '.'),
+          ],
+        ),
+      ),
+    );
   }
 
   void _verifyOtp() async {
@@ -3904,7 +4378,28 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _loading ? null : _showForgotAccountDialog,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(
+                    "Forgot password?",
+                    style: GoogleFonts.sora(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (_isSignUp) ...[
+                _buildSheetTermsConsent(),
+                const SizedBox(height: 8),
+              ],
+              const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
                 height: 50,
@@ -3927,6 +4422,7 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
                 child: GestureDetector(
                   onTap: () => setState(() {
                     _isSignUp = !_isSignUp;
+                    _termsAccepted = false;
                     _passwordController.clear();
                   }),
                   child: Text(
@@ -3937,6 +4433,10 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
                   ),
                 ),
               ),
+              if (!_isSignUp) ...[
+                const SizedBox(height: 12),
+                _buildSheetTermsConsent(),
+              ],
               const SizedBox(height: 16),
               Row(
                 children: [
@@ -7109,7 +7609,7 @@ class _ProfileTabState extends State<ProfileTab> {
                           trailing: const Icon(Icons.open_in_new, size: 16),
                           onTap: () => _showWebViewDialog(
                             "Terms of Service",
-                            _systemSettings['termsOfServiceUrl'] ?? "https://athletepov.com/terms",
+                            _systemSettings['termsOfServiceUrl'] ?? "https://athletespov.com/terms/",
                           ),
                         ),
                         const Divider(height: 1),
@@ -7119,7 +7619,7 @@ class _ProfileTabState extends State<ProfileTab> {
                           trailing: const Icon(Icons.open_in_new, size: 16),
                           onTap: () => _showWebViewDialog(
                             "Privacy Policy",
-                            _systemSettings['privacyPolicyUrl'] ?? "https://athletepov.com/privacy",
+                            _systemSettings['privacyPolicyUrl'] ?? "https://athletespov.com/privacy-policy/",
                           ),
                         ),
                         const Divider(height: 1),

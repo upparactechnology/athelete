@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:geolocator/geolocator.dart';
 import 'api_service.dart';
@@ -249,10 +250,22 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _isSignUp = false;
   bool _passwordVisible = false;
+  bool _termsAccepted = false;
   bool _isGoogleSignInInitialized = false;
   String? _receivedOtp;
   int _resendCountdown = 0;
   Timer? _countdownTimer;
+
+  static const String _termsUrl = 'https://athletespov.com/terms/';
+  static const String _privacyUrl = 'https://athletespov.com/privacy-policy/';
+  static const String _supportEmail = 'contact@athletespov.com';
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
 
   void _startResendTimer() {
     setState(() => _resendCountdown = 30);
@@ -317,6 +330,12 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       return;
     }
+    if (_isSignUp && !_termsAccepted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please accept the Terms of Service and Privacy Policy to create an account')),
+      );
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -337,9 +356,8 @@ class _LoginScreenState extends State<LoginScreen> {
           SnackBar(content: Text(response['data']?['message'] ?? response['message'] ?? 'OTP Sent!')),
         );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(response['message'] ?? 'Failed to request OTP')),
-        );
+        final message = response['message'] ?? 'Failed to request OTP';
+        if (mounted) _handleAccountGuidance(message);
       }
     } catch (e) {
       debugPrint("Error requesting OTP: $e");
@@ -349,6 +367,233 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  /// Shows a guided next step when the account state mismatches the current
+  /// mode (login vs sign-up), otherwise falls back to a plain message.
+  void _handleAccountGuidance(String message) {
+    final lower = message.toLowerCase();
+    if (!_isSignUp && lower.contains('does not exist')) {
+      _showSwitchModeDialog(
+        title: 'No account found',
+        body: 'There is no partner account for this email yet. Create one now to continue.',
+        actionLabel: 'Create account',
+        onAction: () => setState(() {
+          _isSignUp = true;
+          _termsAccepted = false;
+          _otpRequested = false;
+        }),
+      );
+      return;
+    }
+    if (_isSignUp && lower.contains('already exists')) {
+      _showSwitchModeDialog(
+        title: 'Account already exists',
+        body: 'An account with this email already exists. Sign in instead?',
+        actionLabel: 'Sign in',
+        onAction: () => setState(() {
+          _isSignUp = false;
+          _otpRequested = false;
+        }),
+      );
+      return;
+    }
+    _showMessage(message);
+  }
+
+  void _showSwitchModeDialog({
+    required String title,
+    required String body,
+    required String actionLabel,
+    required VoidCallback onAction,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+        content: Text(body, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onAction();
+              _showMessage(_isSignUp
+                  ? 'Enter a password and accept the policies to create your account'
+                  : 'Enter your credentials to sign in');
+            },
+            child: Text(actionLabel, style: const TextStyle(color: AppColors.pink, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openLegalUrl(String url) async {
+    try {
+      final opened = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!opened) _showMessage('Could not open link');
+    } catch (e) {
+      _showMessage('Could not open link');
+    }
+  }
+
+  Future<void> _emailSupport() async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: _supportEmail,
+      query: 'subject=${Uri.encodeComponent('Partner account help')}&body=${Uri.encodeComponent('Hi team,\n\nI need help with my partner account.\n\nEmail: ${_phoneController.text.trim()}\n')}',
+    );
+    try {
+      final opened = await launchUrl(uri);
+      if (!opened) _showMessage('Could not open email app. Please write to $_supportEmail');
+    } catch (e) {
+      _showMessage('Could not open email app. Please write to $_supportEmail');
+    }
+  }
+
+  void _showForgotAccountDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppColors.surface : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Forgot password?', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'If you signed up with Google, just continue with Google below — no password needed.',
+                style: TextStyle(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _handleGoogleSignIn();
+                },
+                icon: const Icon(Icons.g_mobiledata_rounded, color: AppColors.pink, size: 24),
+                label: Text(
+                  'Continue with Google',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.white10),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Forgot which email you used, or need a password reset? Email our support team and we will help you recover your account.',
+                style: TextStyle(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _emailSupport();
+                },
+                icon: const Icon(Icons.email_outlined, color: AppColors.pink, size: 18),
+                label: const Text(_supportEmail, style: TextStyle(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 13)),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTermsConsent() {
+    const linkStyle = TextStyle(
+      color: AppColors.pink,
+      fontWeight: FontWeight.bold,
+      fontSize: 12,
+      decoration: TextDecoration.underline,
+    );
+    const bodyStyle = TextStyle(color: Colors.grey, fontSize: 12);
+    if (_isSignUp) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Checkbox(
+              value: _termsAccepted,
+              activeColor: AppColors.pink,
+              checkColor: Colors.white,
+              side: const BorderSide(color: Colors.grey),
+              onChanged: (v) => setState(() => _termsAccepted = v ?? false),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: bodyStyle,
+                children: [
+                  const TextSpan(text: 'I agree to the '),
+                  TextSpan(
+                    text: 'Terms of Service',
+                    style: linkStyle,
+                    recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_termsUrl),
+                  ),
+                  const TextSpan(text: ' and '),
+                  TextSpan(
+                    text: 'Privacy Policy',
+                    style: linkStyle,
+                    recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_privacyUrl),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    return Center(
+      child: RichText(
+        textAlign: TextAlign.center,
+        text: TextSpan(
+          style: bodyStyle,
+          children: [
+            const TextSpan(text: 'By continuing, you agree to our '),
+            TextSpan(
+              text: 'Terms of Service',
+              style: linkStyle,
+              recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_termsUrl),
+            ),
+            const TextSpan(text: ' and '),
+            TextSpan(
+              text: 'Privacy Policy',
+              style: linkStyle,
+              recognizer: TapGestureRecognizer()..onTap = () => _openLegalUrl(_privacyUrl),
+            ),
+            const TextSpan(text: '.'),
+          ],
+        ),
+      ),
+    );
   }
 
   void _verifyOtp() async {
@@ -581,7 +826,28 @@ class _LoginScreenState extends State<LoginScreen> {
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: _isLoading ? null : _showForgotAccountDialog,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        "Forgot password?",
+                        style: TextStyle(color: AppColors.pink, fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_isSignUp) ...[
+                    _buildTermsConsent(),
+                    const SizedBox(height: 8),
+                  ],
+                  const SizedBox(height: 16),
                   ElevatedButton(
                     onPressed: _isLoading ? null : _requestOtp,
                     style: ElevatedButton.styleFrom(
@@ -601,6 +867,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: GestureDetector(
                       onTap: () => setState(() {
                         _isSignUp = !_isSignUp;
+                        _termsAccepted = false;
                         _passwordController.clear();
                       }),
                       child: Text(
@@ -611,6 +878,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
+                  if (!_isSignUp) ...[
+                    const SizedBox(height: 12),
+                    _buildTermsConsent(),
+                  ],
                   const SizedBox(height: 24),
                   Row(
                     children: [
@@ -7590,7 +7861,7 @@ class _ProfileTabState extends State<ProfileTab> {
           Text("SECURITY SETTINGS", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: secondaryTextColor, letterSpacing: 1)),
           const SizedBox(height: 12),
           _buildSettingsActionTile(Icons.lock_reset_rounded, "Change Password", () {
-            _showActionDialog("Passwordless Account", "Your partner account uses secure, passwordless OTP (One-Time Password) verification via your registered phone number. A password is not required to log in. You can configure Two-Factor Authentication below.");
+            _showActionDialog("Change Password", "To change the password on your partner account, please email our support team at contact@athletespov.com from your registered email address and we will help you.");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.phone_iphone_rounded, "Change Mobile", _showChangeMobileDialog, textColor, secondaryTextColor),
           _buildSwitchRow("Two-Factor Authentication", "Secure account access via OTP tokens", _twoFactorEnabled, (val) async {
@@ -7650,10 +7921,10 @@ class _ProfileTabState extends State<ProfileTab> {
             _showActionDialog("Select Language", "Available Languages:\n- English (Active)\n- Gujarati\n- Hindi");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.description_outlined, "Privacy Policy", () {
-            _showWebViewDialog("Privacy Policy", _systemSettings['privacyPolicyUrl'] ?? "https://athletepov.com/privacy-policy");
+            _showWebViewDialog("Privacy Policy", _systemSettings['privacyPolicyUrl'] ?? "https://athletespov.com/privacy-policy/");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.gavel_rounded, "Terms of Service", () {
-            _showWebViewDialog("Terms of Service", _systemSettings['termsOfServiceUrl'] ?? "https://athletepov.com/terms-of-service");
+            _showWebViewDialog("Terms of Service", _systemSettings['termsOfServiceUrl'] ?? "https://athletespov.com/terms/");
           }, textColor, secondaryTextColor),
           _buildSettingsActionTile(Icons.star_outline_rounded, "Rate App", () {
             final String playStoreUrl = _systemSettings['playStoreUrl'] ?? "https://play.google.com/store/apps/details?id=com.athletepov.partner";
