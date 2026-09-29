@@ -1,12 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- NOTE (Play policy): gallery images are selected via the Android system
+         Photo Picker (image_picker with useAndroidPhotoPicker=true), which
+         grants per-item URI access. Broad media/storage permissions
+         (READ_MEDIA_IMAGES / READ_MEDIA_VIDEO / READ_EXTERNAL_STORAGE /
+         WRITE_EXTERNAL_STORAGE) are intentionally NOT declared.
+         CAMERA is intentionally NOT declared: the app has no camera capture
+         or QR-scanning flow (profile photo uses the gallery picker only). -->
 
     <application
         android:label="Athletespov"

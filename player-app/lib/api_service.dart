@@ -164,6 +164,18 @@ class ApiService {
     return jsonDecode(res.body);
   }
 
+  /// Permanently deletes the authenticated user's own account.
+  ///
+  /// Calls the existing backend `DELETE /api/users/me` endpoint with the
+  /// stored Bearer token. The server anonymizes/disables the account,
+  /// revokes all sessions, and answers `{success:true,
+  /// data:{deleted:true, anonymized:true}}`. Callers must clear local
+  /// credentials and return to the login screen on success.
+  static Future<Map<String, dynamic>> deleteAccount() async {
+    final res = await http.delete(Uri.parse('$_activeUrl/users/me'), headers: await _headers());
+    return jsonDecode(res.body);
+  }
+
   static Future<Map<String, dynamic>> updateProfile({
     String? name,
     String? email,

@@ -11,7 +11,6 @@ import 'package:http/http.dart' as http;
 import 'websocket_sync.dart';
 import 'api_service.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -21,7 +20,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image_picker_android/image_picker_android.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:webview_flutter/webview_flutter.dart';
 
 class AppColors {
@@ -343,6 +344,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ApiService.checkServerUrl();
+  // Use the Android system Photo Picker for gallery selection (no broad
+  // media/storage permission required on Android 13+). The profile-photo
+  // flow calls pickImage(ImageSource.gallery) and uploads the returned file.
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    final ImagePickerPlatform platform = ImagePickerPlatform.instance;
+    if (platform is ImagePickerAndroid) {
+      platform.useAndroidPhotoPicker = true;
+    }
+  }
   try {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -6955,16 +6965,49 @@ class _ProfileTabState extends State<ProfileTab> {
   void _deleteAccount() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text("Delete Account"),
-        content: const Text("Are you sure you want to permanently delete your account? This action cannot be undone."),
+        content: const Text(
+          "Are you sure you want to permanently delete your account? "
+          "Your profile will be anonymized, you will be signed out, and "
+          "this action cannot be undone.",
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text("Cancel")),
           TextButton(
             onPressed: () async {
-              Navigator.pop(context);
-              AppToast.show(context, "Account deletion initiated.");
-              _logout();
+              Navigator.pop(dialogCtx);
+              if (!mounted) return;
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (spinnerCtx) => const Center(child: CircularProgressIndicator(color: AppColors.pink)),
+              );
+              try {
+                final res = await ApiService.deleteAccount();
+                if (!mounted) return;
+                Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+                if (res['success'] == true) {
+                  WebSocketSyncManager.disconnect();
+                  await ApiService.clearToken();
+                  if (!mounted) return;
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (context) => SplashScreen(toggleTheme: widget.toggleTheme)),
+                    (route) => false,
+                  );
+                  AppToast.show(context, "Your account has been permanently deleted.");
+                } else {
+                  AppToast.show(
+                    context,
+                    res['message']?.toString() ?? res['error']?['message']?.toString() ?? 'Failed to delete account. Please try again.',
+                    isError: true,
+                  );
+                }
+              } catch (e) {
+                if (!mounted) return;
+                Navigator.of(context, rootNavigator: true).pop(); // Close spinner
+                AppToast.show(context, 'Failed to delete account: $e', isError: true);
+              }
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
           ),
