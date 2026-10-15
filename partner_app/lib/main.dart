@@ -297,6 +297,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
     debugPrint('[GoogleAuth] initialize started');
     await GoogleSignIn.instance.initialize(
+      clientId: defaultTargetPlatform == TargetPlatform.iOS ||
+              defaultTargetPlatform == TargetPlatform.macOS
+          ? '239542933796-euu4nkudblq5jnedvjdsq2ee2g06d36o.apps.googleusercontent.com'
+          : null,
       serverClientId:
           '239542933796-07n2hl6ehh9sioac43ljhetai1a3jhgu.apps.googleusercontent.com',
     );

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>239542933796-euu4nkudblq5jnedvjdsq2ee2g06d36o.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.239542933796-euu4nkudblq5jnedvjdsq2ee2g06d36o</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>239542933796-bgoati2dhpir79sc1h0u6as42ufrspoc.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyA3szYptMKuLCMszPgh-cQQyL1xGoJzgvA</string>
+	<key>GCM_SENDER_ID</key>
+	<string>239542933796</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.athletepov.partner</string>
+	<key>PROJECT_ID</key>
+	<string>athelete-30fd7</string>
+	<key>STORAGE_BUCKET</key>
+	<string>athelete-30fd7.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:239542933796:ios:299b161cddf06e78017bb1</string>
+</dict>
+</plist>
