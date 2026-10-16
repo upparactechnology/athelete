@@ -19,6 +19,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image_picker_android/image_picker_android.dart';
 import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
@@ -705,8 +706,10 @@ class _LoginScreenState extends State<LoginScreen> {
   void _showForgotAccountDialog() {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Theme.of(ctx).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.surface : Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Forgot password?', style: GoogleFonts.sora(fontWeight: FontWeight.bold, fontSize: 17)),
         content: SingleChildScrollView(
@@ -732,6 +735,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
               ),
+              if (Platform.isIOS) ...[
+                const SizedBox(height: 8),
+                SignInWithAppleButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _handleAppleSignIn();
+                  },
+                  style: isDark ? SignInWithAppleButtonStyle.white : SignInWithAppleButtonStyle.black,
+                  height: 48,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ],
               const SizedBox(height: 12),
               Text(
                 'Forgot which email you used, or need a password reset? Email our support team and we will help you recover your account.',
@@ -755,9 +770,10 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Text('Close', style: GoogleFonts.sora(color: Colors.grey, fontWeight: FontWeight.bold)),
           ),
         ],
-      ),
-    );
-  }
+      );
+    },
+  );
+}
 
   Widget _buildTermsConsent(Color subtextCol) {
     final linkStyle = GoogleFonts.sora(
@@ -1014,6 +1030,119 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _handleAppleSignIn() async {
+    setState(() => _isLoading = true);
+    try {
+      debugPrint('[AppleAuth] authenticate started');
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+      );
+
+      final String? identityToken = credential.identityToken;
+      final String userIdentifier = credential.userIdentifier ?? '';
+
+      if (identityToken == null || identityToken.isEmpty) {
+        throw Exception('Apple did not return an identity token');
+      }
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return Center(
+            child: Card(
+              color: Theme.of(context).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: AppColors.pink),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Connecting with Athlete POV...",
+                      style: GoogleFonts.sora(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      final response = await ApiService.appleLogin(
+        identityToken: identityToken,
+        userIdentifier: userIdentifier,
+        email: credential.email,
+        givenName: credential.givenName,
+        familyName: credential.familyName,
+      );
+
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      if (response['success'] == true) {
+        WebSocketSyncManager.connect();
+        if (!mounted) return;
+        try {
+          final profileRes = await ApiService.getProfile();
+          if (profileRes['success'] == true) {
+            final profile = profileRes['data'] ?? {};
+            final phoneNumber = profile['phone_number'] ?? '';
+            if (phoneNumber.contains('@') || phoneNumber.isEmpty) {
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
+                ),
+              );
+              return;
+            }
+          }
+        } catch (e) {
+          debugPrint("Error fetching profile: $e");
+        }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
+          ),
+        );
+      } else {
+        if (mounted) {
+          AppToast.show(context, response['message'] ?? 'Apple Sign-In failed', isError: true);
+        }
+      }
+    } on SignInWithAppleAuthorizationException catch (e) {
+      debugPrint('[AppleAuth] authenticate failed: ${e.code} - ${e.message}');
+      if (mounted) {
+        if (e.code == AuthorizationErrorCode.canceled) {
+          return;
+        }
+        final String errorMsg = e.code == AuthorizationErrorCode.unknown
+            ? 'Apple Sign-In requires an Apple ID signed in under Settings (or a real device), and the capability enabled in your Apple Developer account.'
+            : 'Apple Sign-In error: ${e.message.isNotEmpty ? e.message : e.code}';
+        AppToast.show(context, errorMsg, isError: true);
+      }
+    } catch (e) {
+      debugPrint('[AppleAuth] unexpected error: $e');
+      if (mounted) {
+        AppToast.show(context, 'Apple Sign-In error: $e', isError: true);
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1215,6 +1344,16 @@ class _LoginScreenState extends State<LoginScreen> {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                           ),
                         ),
+                        if (Platform.isIOS) ...[
+                          const SizedBox(height: 12),
+                          SignInWithAppleButton(
+                            onPressed: _isLoading ? () {} : _handleAppleSignIn,
+                            style: isDark ? SignInWithAppleButtonStyle.white : SignInWithAppleButtonStyle.black,
+                            text: _isSignUp ? "Sign up with Apple" : "Sign in with Apple",
+                            height: 52,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ],
                       ] else ...[
                         TextField(
                           controller: _otpController,
@@ -4193,6 +4332,18 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
               ),
+              if (Platform.isIOS) ...[
+                const SizedBox(height: 8),
+                SignInWithAppleButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _handleAppleSignIn();
+                  },
+                  style: SignInWithAppleButtonStyle.white,
+                  height: 48,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ],
               const SizedBox(height: 12),
               Text(
                 'Need a password reset or forgot your email? Write to us and we will help you recover your account.',
@@ -4399,6 +4550,57 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
     }
   }
 
+  void _handleAppleSignIn() async {
+    setState(() => _loading = true);
+    try {
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+      );
+
+      final String? identityToken = credential.identityToken;
+      final String userIdentifier = credential.userIdentifier ?? '';
+
+      if (identityToken == null || identityToken.isEmpty) {
+        throw Exception('Apple did not return an identity token');
+      }
+
+      final res = await ApiService.appleLogin(
+        identityToken: identityToken,
+        userIdentifier: userIdentifier,
+        email: credential.email,
+        givenName: credential.givenName,
+        familyName: credential.familyName,
+      );
+
+      if (res['success'] == true) {
+        WebSocketSyncManager.connect();
+        AppToast.show(context, "Login Successful!");
+        Navigator.pop(context);
+        widget.onSuccess();
+      } else {
+        AppToast.show(context, res['message'] ?? 'Apple Sign-In failed', isError: true);
+      }
+    } on SignInWithAppleAuthorizationException catch (e) {
+      debugPrint('[AppleAuth] authenticate failed: ${e.code}');
+      if (mounted) {
+        if (e.code == AuthorizationErrorCode.canceled) return;
+        final String errorMsg = e.code == AuthorizationErrorCode.unknown
+            ? 'Apple Sign-In requires an Apple ID signed in under Settings (or a real device).'
+            : 'Apple Sign-In error: ${e.message.isNotEmpty ? e.message : e.code}';
+        AppToast.show(context, errorMsg, isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        AppToast.show(context, 'Apple Sign-In error: $e', isError: true);
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final textCol = Colors.white;
@@ -4550,6 +4752,19 @@ class _LoginModalSheetState extends State<_LoginModalSheet> {
                   ),
                 ),
               ),
+              if (Platform.isIOS) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: SignInWithAppleButton(
+                    onPressed: _loading ? () {} : _handleAppleSignIn,
+                    style: SignInWithAppleButtonStyle.white,
+                    text: _isSignUp ? "Sign up with Apple" : "Continue with Apple",
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+              ],
             ] else ...[
               TextField(
                 controller: _otpController,

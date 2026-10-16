@@ -158,6 +158,33 @@ class ApiService {
     return data;
   }
 
+  static Future<Map<String, dynamic>> appleLogin({
+    required String identityToken,
+    required String userIdentifier,
+    String? email,
+    String? givenName,
+    String? familyName,
+  }) async {
+    await checkServerUrl();
+    final res = await http.post(
+      Uri.parse('$_activeUrl/auth/apple'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'identityToken': identityToken,
+        'userIdentifier': userIdentifier,
+        'email': email,
+        'givenName': givenName,
+        'familyName': familyName,
+        'role': 'user',
+      }),
+    );
+    final data = jsonDecode(res.body);
+    if (data['success'] == true && data['data']?['accessToken'] != null) {
+      await setToken(data['data']['accessToken']);
+    }
+    return data;
+  }
+
   // 2. Profile
   static Future<Map<String, dynamic>> getProfile() async {
     final res = await http.get(Uri.parse('$_activeUrl/users/me'), headers: await _headers());

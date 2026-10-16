@@ -10,3 +10,4 @@ pgdata/
 
 # Production uploads — never commit or delete
 public/uploads/
+.kotlin/
