@@ -81,5 +81,13 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Athletespov Partner requires access to your camera to scan athlete QR codes for session check-ins and capture facility photos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Athletespov Partner requires access to your photo library to allow you to upload gym, venue, and profile pictures.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Athletespov Partner uses your location to verify venue proximity during athlete check-in sessions.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

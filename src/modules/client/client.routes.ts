@@ -12,6 +12,7 @@ clientRoutes.post('/auth/request-otp', otpRequestLimiter, ClientController.reque
 clientRoutes.post('/auth/verify-otp', otpVerifyLimiter, ClientController.verifyOtp);
 clientRoutes.post('/auth/login', loginLimiter, ClientController.login);
 clientRoutes.post('/auth/google', googleLoginLimiter, ClientController.googleLogin);
+clientRoutes.post('/auth/apple', googleLoginLimiter, ClientController.appleLogin);
 // P2-7: refresh rotation + logout (public bearer-of-token endpoints).
 clientRoutes.post('/auth/refresh', sessionLimiter, ClientController.refreshAccessToken);
 clientRoutes.post('/auth/logout', sessionLimiter, ClientController.logout);

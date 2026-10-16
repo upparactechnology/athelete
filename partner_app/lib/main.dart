@@ -18,6 +18,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'widgets/glass_container.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -511,6 +512,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
+              if (Platform.isIOS) ...[
+                const SizedBox(height: 8),
+                SignInWithAppleButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _handleAppleSignIn();
+                  },
+                  style: isDark ? SignInWithAppleButtonStyle.white : SignInWithAppleButtonStyle.black,
+                  height: 48,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ],
               const SizedBox(height: 12),
               const Text(
                 'Forgot which email you used, or need a password reset? Email our support team and we will help you recover your account.',
@@ -808,6 +821,123 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _handleAppleSignIn() async {
+    setState(() => _isLoading = true);
+    try {
+      debugPrint('[AppleAuth] authenticate started');
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+      );
+
+      final String? identityToken = credential.identityToken;
+      final String userIdentifier = credential.userIdentifier ?? '';
+
+      if (identityToken == null || identityToken.isEmpty) {
+        debugPrint('[AppleAuth] identity token missing');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Apple did not return an identity token')),
+          );
+        }
+        return;
+      }
+      debugPrint('[AppleAuth] identity token received');
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return Center(
+            child: Card(
+              color: Theme.of(context).brightness == Brightness.dark ? AppColors.surface : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: AppColors.pink),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Connecting with Athlete POV...",
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      final response = await ApiService.appleLogin(
+        identityToken: identityToken,
+        userIdentifier: userIdentifier,
+        email: credential.email,
+        givenName: credential.givenName,
+        familyName: credential.familyName,
+      );
+
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      if (response['success'] == true) {
+        WebSocketSyncManager.connect();
+        if (!mounted) return;
+        final profileRes = await ApiService.getProfile();
+        final profile = profileRes['data'] ?? {};
+        final phoneNumber = profile['phone_number'] ?? '';
+
+        if (phoneNumber.contains('@')) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => PhoneCollectionScreen(toggleTheme: widget.toggleTheme),
+            ),
+          );
+          return;
+        }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => DashboardScreen(toggleTheme: widget.toggleTheme),
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(response['message'] ?? 'Apple Sign-In failed')),
+          );
+        }
+      }
+    } on SignInWithAppleAuthorizationException catch (e) {
+      debugPrint('[AppleAuth] authenticate failed: ${e.code}');
+      if (mounted) {
+        if (e.code != AuthorizationErrorCode.canceled && e.code != AuthorizationErrorCode.unknown) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Apple Sign-In error: ${e.message}')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[AppleAuth] unexpected error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Apple Sign-In error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -974,6 +1104,16 @@ class _LoginScreenState extends State<LoginScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                   ),
+                  if (Platform.isIOS) ...[
+                    const SizedBox(height: 12),
+                    SignInWithAppleButton(
+                      onPressed: _isLoading ? () {} : _handleAppleSignIn,
+                      style: isDark ? SignInWithAppleButtonStyle.white : SignInWithAppleButtonStyle.black,
+                      text: _isSignUp ? "Sign up with Apple" : "Sign in with Apple",
+                      height: 52,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ],
                 ] else ...[
                   TextField(
                     controller: _otpController,

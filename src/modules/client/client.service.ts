@@ -43,6 +43,7 @@ import { requestBookingRefund } from '../../shared/services/refunds.js';
 import { claimCouponUsage, recordCouponRedemption, rollbackCouponForBooking } from '../../shared/services/coupons.js';
 import { createSession, refreshSession, revokeAllSessions, revokeSession } from '../../shared/utils/sessions.js';
 import { normalizeAuthRole, verifyGoogleIdToken } from '../../shared/utils/googleAuth.js';
+import { verifyAppleIdToken } from '../../shared/utils/appleAuth.js';
 
 const OTP_RESEND_COOLDOWN_KEY = (phone: string) => `otp:cooldown:${phone}`;
 const BOOKING_PAYMENT_GUARD_KEY = (paymentId: string) => `processed_booking_payment:${paymentId}`;
@@ -318,6 +319,66 @@ export class ClientService {
 
     const { accessToken, refreshToken } = await createSession(id, role);
 
+    return { accessToken, refreshToken };
+  }
+
+  public static async appleLogin(params: {
+    identityToken: string;
+    userIdentifier?: string;
+    email?: string;
+    givenName?: string;
+    familyName?: string;
+    role?: string;
+  }) {
+    const { identityToken, userIdentifier, email: clientEmail, givenName, familyName, role: requestedRole } = params;
+    const role = normalizeAuthRole(requestedRole, 'user');
+    const profile = await verifyAppleIdToken(identityToken, userIdentifier, clientEmail, givenName, familyName);
+
+    const email = profile.email;
+    const name = profile.name;
+    let id = "";
+
+    if (role === 'partner') {
+      let partner = await prisma.partner.findFirst({ where: { email } });
+      if (!partner) {
+        const newPartnerData: any = {
+          email,
+          phone_number: email,
+          kyc_status: 'unverified',
+          total_earnings: 0.0
+        };
+        partner = await prisma.partner.create({
+          data: newPartnerData
+        });
+      }
+      id = partner.partner_id;
+    } else {
+      let user = await prisma.user.findFirst({ where: { email } });
+      if (!user) {
+        user = await prisma.user.create({
+          data: {
+            email,
+            phone_number: email,
+            name,
+            status: "Active",
+            total_bookings: 0,
+            total_spend: 0.0
+          }
+        });
+      }
+      id = user.user_id;
+
+      const existingLink = await prisma.oAuthIdentity.findFirst({
+        where: { user_id: id, provider: 'apple', provider_user_id: profile.sub },
+      });
+      if (!existingLink) {
+        await prisma.oAuthIdentity.create({
+          data: { user_id: id, provider: 'apple', provider_user_id: profile.sub },
+        });
+      }
+    }
+
+    const { accessToken, refreshToken } = await createSession(id, role);
     return { accessToken, refreshToken };
   }
 

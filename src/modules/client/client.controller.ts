@@ -61,6 +61,23 @@ export class ClientController {
     }
   }
 
+  public static async appleLogin(req: any, res: Response, next: NextFunction) {
+    try {
+      const { identityToken, userIdentifier, email, givenName, familyName, role } = req.body;
+      const data = await ClientService.appleLogin({
+        identityToken,
+        userIdentifier,
+        email,
+        givenName,
+        familyName,
+        role,
+      });
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // 2. Profile Handlers
   public static async getProfile(req: AuthRequest, res: Response, next: NextFunction) {
     try {

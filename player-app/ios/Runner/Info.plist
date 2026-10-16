@@ -45,5 +45,13 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Athletespov requires camera access to take profile pictures and scan passes.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Athletespov requires access to your photo library to allow you to select and upload profile pictures.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Athletespov uses your location to discover sports venues, trainers, and sessions near you.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
