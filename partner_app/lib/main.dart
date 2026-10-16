@@ -918,13 +918,20 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
     } on SignInWithAppleAuthorizationException catch (e) {
-      debugPrint('[AppleAuth] authenticate failed: ${e.code}');
+      debugPrint('[AppleAuth] authenticate failed: ${e.code} - ${e.message}');
       if (mounted) {
-        if (e.code != AuthorizationErrorCode.canceled && e.code != AuthorizationErrorCode.unknown) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Apple Sign-In error: ${e.message}')),
-          );
+        if (e.code == AuthorizationErrorCode.canceled) {
+          return;
         }
+        final String errorMsg = e.code == AuthorizationErrorCode.unknown
+            ? 'Apple Sign-In requires an Apple ID signed in under Settings (or a real device), and the capability enabled in your Apple Developer account.'
+            : 'Apple Sign-In error: ${e.message.isNotEmpty ? e.message : e.code}';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            duration: const Duration(seconds: 5),
+          ),
+        );
       }
     } catch (e) {
       debugPrint('[AppleAuth] unexpected error: $e');
